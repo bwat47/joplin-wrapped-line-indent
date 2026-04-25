@@ -10,7 +10,17 @@
     "repository_url": "https://github.com/bwat47/joplin-wrapped-line-indent",
     "keywords": ["editor", "wrapping", "alignment", "list"],
     "categories": ["appearance", "editor"],
-    "screenshots": [],
-    "icons": {},
-    "promo_tile": {}
+    "screenshots": [{ "src": "images/screenshot1.png", "label": "wrapped line indent screenshot 1" }],
+    "icons": {
+        "128": "images/128.png",
+        "64": "images/64.png",
+        "48": "images/48.png",
+        "32": "images/32.png",
+        "24": "images/24.png",
+        "16": "images/16.png"
+    },
+    "promo_tile": {
+        "src": "images/wrapped-line-indent-promo.png",
+        "label": "Wrapped line indent Promo Tile"
+    }
 }
