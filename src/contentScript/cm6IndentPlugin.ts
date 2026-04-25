@@ -325,7 +325,11 @@ class WrappedLineIndentPlugin implements PluginValue {
         });
     }
 
-    private measurePrefixes(view: EditorView, targets: Map<string, MeasurementTarget>, measuredDoc: Text): MeasureReadResult {
+    private measurePrefixes(
+        view: EditorView,
+        targets: Map<string, MeasurementTarget>,
+        measuredDoc: Text
+    ): MeasureReadResult {
         const measuredWidths = new Map<string, number>();
         if (view.state.doc !== measuredDoc) {
             return { isStale: true, needsRetry: false, widths: measuredWidths };
