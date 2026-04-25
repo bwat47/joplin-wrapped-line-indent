@@ -20,6 +20,8 @@ Examples handled:
 
 The plugin skips fenced and indented code blocks.
 
+Works with/without Joplin's render markup enabled and whether you're using tabs/spaces for Indentation.
+
 ## Requirements
 
 - Joplin 3.3 or newer
