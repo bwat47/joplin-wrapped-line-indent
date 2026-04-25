@@ -1,4 +1,4 @@
-import { getIndentPrefix, getTabReplacementWidth } from './cm6IndentPlugin';
+import { getIndentPrefix, getLineDecorationStyle, getTabReplacementWidth } from './cm6IndentPlugin';
 
 describe('getIndentPrefix', () => {
     it('includes list markers inside block quotes', () => {
@@ -19,5 +19,11 @@ describe('getTabReplacementWidth', () => {
         expect(getTabReplacementWidth('  ', 4, 10)).toBe(20);
         expect(getTabReplacementWidth('\t', 4, 10)).toBe(40);
         expect(getTabReplacementWidth('\t- ', 4, 10)).toBe(20);
+    });
+});
+
+describe('getLineDecorationStyle', () => {
+    it('preserves the editor line padding when adding wrapped indent padding', () => {
+        expect(getLineDecorationStyle(24, 10)).toBe('padding-left: 34px; text-indent: -24px;');
     });
 });

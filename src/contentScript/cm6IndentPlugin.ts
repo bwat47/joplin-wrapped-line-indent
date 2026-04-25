@@ -11,8 +11,8 @@ import {
 } from '@codemirror/view';
 import type { SyntaxNode } from '@lezer/common';
 
-const BASE_PADDING = 6;
 const MAX_MEASUREMENT_RETRIES = 20;
+const WRAPPED_LINE_CLASS = 'cm-wrapped-line-indent';
 
 const measurementsChanged = StateEffect.define<void>();
 
@@ -31,6 +31,7 @@ interface MeasurementTarget {
 }
 
 interface MeasureReadResult {
+    linePaddingLeft: number;
     isStale: boolean;
     needsRetry: boolean;
     widths: Map<string, number>;
@@ -154,12 +155,27 @@ function addTabReplacementDecorations(
     }
 }
 
-function createLineDecoration(width: number): Decoration {
-    const paddingLeft = width + BASE_PADDING;
+export function getLineDecorationStyle(width: number, linePaddingLeft: number): string {
+    const paddingLeft = width + linePaddingLeft;
 
+    return `padding-left: ${paddingLeft}px; text-indent: -${width}px;`;
+}
+
+function getLinePaddingLeft(view: EditorView, fallbackPaddingLeft: number): number {
+    const lineElement = view.contentDOM.querySelector<HTMLElement>(`.cm-line:not(.${WRAPPED_LINE_CLASS})`);
+    if (!lineElement) {
+        return fallbackPaddingLeft;
+    }
+
+    const paddingLeft = Number.parseFloat(getComputedStyle(lineElement).paddingLeft);
+    return Number.isFinite(paddingLeft) ? paddingLeft : fallbackPaddingLeft;
+}
+
+function createLineDecoration(width: number, linePaddingLeft: number): Decoration {
     return Decoration.line({
         attributes: {
-            style: `padding-left: ${paddingLeft}px; text-indent: -${width}px;`,
+            class: WRAPPED_LINE_CLASS,
+            style: getLineDecorationStyle(width, linePaddingLeft),
         },
     });
 }
@@ -183,6 +199,10 @@ class WrappedLineIndentPlugin implements PluginValue {
 
     private refreshFrame: number | null = null;
 
+    private linePaddingLeft = 0;
+
+    private linePaddingMeasurementNeeded = true;
+
     public constructor(private readonly view: EditorView) {
         this.measurementSignature = getMeasurementSignature(view);
         this.decorations = this.buildDecorations();
@@ -195,6 +215,7 @@ class WrappedLineIndentPlugin implements PluginValue {
         if (measurementsNeedRefresh) {
             this.measurementSignature = nextMeasurementSignature;
             this.cachedPrefixWidths.clear();
+            this.linePaddingMeasurementNeeded = true;
         }
 
         if (
@@ -206,6 +227,10 @@ class WrappedLineIndentPlugin implements PluginValue {
                 transaction.effects.some((effect) => effect.is(measurementsChanged))
             )
         ) {
+            if (update.geometryChanged) {
+                this.linePaddingMeasurementNeeded = true;
+            }
+
             this.decorations = this.buildDecorations();
             this.scheduleMeasure();
         }
@@ -263,14 +288,14 @@ class WrappedLineIndentPlugin implements PluginValue {
         if (cachedWidth === undefined) {
             this.pendingMeasurements.set(match.prefix, { from: line.from, to: prefixTo });
         } else if (cachedWidth > 0) {
-            builder.add(line.from, line.from, createLineDecoration(cachedWidth));
+            builder.add(line.from, line.from, createLineDecoration(cachedWidth, this.linePaddingLeft));
         }
 
         addTabReplacementDecorations(builder, line, match.prefix, this.view);
     }
 
     private scheduleMeasure(): void {
-        if (this.measureScheduled || this.pendingMeasurements.size === 0) {
+        if (this.measureScheduled || (this.pendingMeasurements.size === 0 && !this.linePaddingMeasurementNeeded)) {
             return;
         }
 
@@ -279,17 +304,25 @@ class WrappedLineIndentPlugin implements PluginValue {
         const measuredDoc = this.view.state.doc;
 
         this.view.requestMeasure<MeasureReadResult>({
-            read: (view) => this.measurePrefixes(view, targets, measuredDoc),
+            read: (view) => this.measurePrefixes(view, targets, measuredDoc, this.linePaddingLeft),
             write: (result) => {
                 this.measureScheduled = false;
 
                 if (result.isStale) {
                     this.measurementRetries = 0;
+                    this.linePaddingMeasurementNeeded = true;
                     this.scheduleMeasure();
                     return;
                 }
 
                 let changed = false;
+                if (this.linePaddingLeft !== result.linePaddingLeft) {
+                    this.linePaddingLeft = result.linePaddingLeft;
+                    changed = true;
+                }
+
+                this.linePaddingMeasurementNeeded = false;
+
                 for (const [prefix, width] of result.widths) {
                     if (this.cachedPrefixWidths.get(prefix) !== width) {
                         this.cachedPrefixWidths.set(prefix, width);
@@ -328,11 +361,13 @@ class WrappedLineIndentPlugin implements PluginValue {
     private measurePrefixes(
         view: EditorView,
         targets: Map<string, MeasurementTarget>,
-        measuredDoc: Text
+        measuredDoc: Text,
+        fallbackPaddingLeft: number
     ): MeasureReadResult {
         const measuredWidths = new Map<string, number>();
+        const linePaddingLeft = getLinePaddingLeft(view, fallbackPaddingLeft);
         if (view.state.doc !== measuredDoc) {
-            return { isStale: true, needsRetry: false, widths: measuredWidths };
+            return { linePaddingLeft, isStale: true, needsRetry: false, widths: measuredWidths };
         }
 
         let needsRetry = false;
@@ -354,7 +389,7 @@ class WrappedLineIndentPlugin implements PluginValue {
             measuredWidths.set(prefix, width);
         }
 
-        return { isStale: false, needsRetry, widths: measuredWidths };
+        return { linePaddingLeft, isStale: false, needsRetry, widths: measuredWidths };
     }
 }
 
