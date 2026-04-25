@@ -1,4 +1,6 @@
+import { markdown } from '@codemirror/lang-markdown';
 import { EditorState } from '@codemirror/state';
+import type { Extension } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 
 import {
@@ -35,7 +37,7 @@ describe('wrappedLineIndentExtension', () => {
         flushAnimationFrames();
     };
 
-    const createView = (doc: string): EditorView => {
+    const createView = (doc: string, extensions: Extension[] = []): EditorView => {
         const parent = document.createElement('div');
         document.body.append(parent);
 
@@ -43,7 +45,7 @@ describe('wrappedLineIndentExtension', () => {
             parent,
             state: EditorState.create({
                 doc,
-                extensions: [wrappedLineIndentExtension],
+                extensions: [...extensions, wrappedLineIndentExtension],
             }),
         });
         for (const lineElement of view.dom.querySelectorAll<HTMLElement>('.cm-line')) {
@@ -186,6 +188,23 @@ describe('wrappedLineIndentExtension', () => {
 
         expect(view.dom.querySelectorAll<HTMLElement>('.cm-wrapped-line-indent')).toHaveLength(2);
         expect(coordsAtPosSpy).not.toHaveBeenCalled();
+
+        view.destroy();
+    });
+
+    it('skips fenced and indented code blocks using markdown syntax parsing', () => {
+        const view = createView(
+            '- list item\n\n```\n- fenced code\n```\n\n    - indented code\n\n- another list item',
+            [markdown()]
+        );
+
+        flushMeasureCycle(view);
+
+        const decoratedLineNumbers = [...view.dom.querySelectorAll<HTMLElement>('.cm-line')]
+            .map((lineElement, index) => (lineElement.classList.contains('cm-wrapped-line-indent') ? index + 1 : null))
+            .filter((lineNumber): lineNumber is number => lineNumber !== null);
+
+        expect(decoratedLineNumbers).toEqual([1, 9]);
 
         view.destroy();
     });
