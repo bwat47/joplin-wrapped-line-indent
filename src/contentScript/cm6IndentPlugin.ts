@@ -111,18 +111,18 @@ function intersectsFoldedRange(state: EditorState, from: number, to: number): bo
     return intersects;
 }
 
-function isCodeLikeNode(nodeName: string): boolean {
-    return /^(?:InlineCode|CodeText|CodeBlock|FencedCode|CodeMark|CodeInfo|Code)$/i.test(nodeName);
+function isBlockCodeNode(nodeName: string): boolean {
+    return /^(?:CodeBlock|FencedCode|CodeInfo)$/i.test(nodeName);
 }
 
-function isInCodeLikeSyntax(state: EditorState, from: number, to: number): boolean {
+function isInBlockCodeSyntax(state: EditorState, from: number, to: number): boolean {
     const tree = syntaxTree(state);
     let position = from;
 
     while (position <= to) {
         let node: SyntaxNode | null = tree.resolveInner(position, 1);
         while (node) {
-            if (isCodeLikeNode(node.name)) {
+            if (isBlockCodeNode(node.name)) {
                 return true;
             }
 
@@ -284,7 +284,7 @@ class WrappedLineIndentPlugin implements PluginValue {
         const prefixTo = line.from + match.prefix.length;
         if (
             intersectsFoldedRange(this.view.state, line.from, prefixTo) ||
-            isInCodeLikeSyntax(this.view.state, line.from, prefixTo)
+            isInBlockCodeSyntax(this.view.state, line.from, prefixTo)
         ) {
             return;
         }
