@@ -8,6 +8,7 @@ import {
     getLineDecorationStyle,
     getTabReplacementWidth,
     isBlockCodeNode,
+    isHorizontalRuleNode,
     wrappedLineIndentExtension,
 } from './cm6IndentPlugin';
 
@@ -289,6 +290,20 @@ describe('wrappedLineIndentExtension', () => {
         view.destroy();
     });
 
+    it('skips horizontal rules using markdown syntax parsing', () => {
+        const view = createView('- list item\n\n***\n* * *\n- - -\n\n* another list item', [markdown()]);
+
+        flushMeasureCycle(view);
+
+        const decoratedLineNumbers = [...view.dom.querySelectorAll<HTMLElement>('.cm-line')]
+            .map((lineElement, index) => (lineElement.classList.contains('cm-wrapped-line-indent') ? index + 1 : null))
+            .filter((lineNumber): lineNumber is number => lineNumber !== null);
+
+        expect(decoratedLineNumbers).toEqual([1, 7]);
+
+        view.destroy();
+    });
+
     it('does not dispatch a refresh from a pending measure after plugin destruction', () => {
         const view = createView('- item');
         const dispatchSpy = jest.spyOn(view, 'dispatch');
@@ -343,5 +358,16 @@ describe('isBlockCodeNode', () => {
         expect(isBlockCodeNode('CodeBlock')).toBe(true);
         expect(isBlockCodeNode('FencedCode')).toBe(true);
         expect(isBlockCodeNode('CodeInfo')).toBe(true);
+    });
+});
+
+describe('isHorizontalRuleNode', () => {
+    it('recognizes horizontal rule syntax nodes', () => {
+        expect(isHorizontalRuleNode('HorizontalRule')).toBe(true);
+    });
+
+    it('does not treat list syntax nodes as horizontal rules', () => {
+        expect(isHorizontalRuleNode('BulletList')).toBe(false);
+        expect(isHorizontalRuleNode('ListMark')).toBe(false);
     });
 });

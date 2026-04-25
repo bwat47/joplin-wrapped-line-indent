@@ -120,13 +120,21 @@ export function isBlockCodeNode(nodeName: string): boolean {
     return /^(?:CodeBlock|FencedCode|CodeInfo)$/i.test(nodeName);
 }
 
-function isInBlockCodeSyntax(state: EditorState, from: number, to: number): boolean {
+export function isHorizontalRuleNode(nodeName: string): boolean {
+    return /^HorizontalRule$/i.test(nodeName);
+}
+
+function isIndentExcludedNode(nodeName: string): boolean {
+    return isBlockCodeNode(nodeName) || isHorizontalRuleNode(nodeName);
+}
+
+function isInIndentExcludedSyntax(state: EditorState, from: number, to: number): boolean {
     const tree = syntaxTree(state);
 
     for (const position of from === to ? [from] : [from, to]) {
         let node: SyntaxNode | null = tree.resolveInner(position, 1);
         while (node) {
-            if (isBlockCodeNode(node.name)) {
+            if (isIndentExcludedNode(node.name)) {
                 return true;
             }
 
@@ -310,7 +318,7 @@ class WrappedLineIndentPlugin implements PluginValue {
         const prefixTo = line.from + prefix.length;
         if (
             intersectsFoldedRange(this.view.state, line.from, prefixTo) ||
-            isInBlockCodeSyntax(this.view.state, line.from, prefixTo)
+            isInIndentExcludedSyntax(this.view.state, line.from, prefixTo)
         ) {
             return;
         }
