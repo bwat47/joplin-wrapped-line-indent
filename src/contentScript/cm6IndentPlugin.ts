@@ -47,10 +47,18 @@ const spaceWidget = new SpaceWidget();
  * - `   text`
  * - `  - item`, `  * [x] task`, `  12. item`, `  12) item`
  * - `> quote`, `> > nested quote`, including indentation before `>`
+ * - `> - item`, `> > 1. nested item`, including the list marker after the quote prefix
  */
-function getIndentPrefix(lineText: string): PrefixMatch | null {
+export function getIndentPrefix(lineText: string): PrefixMatch | null {
     const blockquoteMatch = /^([ \t]*(?:>[ \t]*)+)/.exec(lineText);
     if (blockquoteMatch?.[1]) {
+        const listMatch = /^([ \t]*(?:[-*+]|\d+[.)])[ \t]+(?:\[[ xX]\][ \t]+)?)/.exec(
+            lineText.slice(blockquoteMatch[1].length)
+        );
+        if (listMatch?.[1]) {
+            return { prefix: blockquoteMatch[1] + listMatch[1] };
+        }
+
         return { prefix: blockquoteMatch[1] };
     }
 
