@@ -321,11 +321,23 @@ class WrappedLineIndentPlugin implements PluginValue {
             this.pendingMeasurements.set(cacheKey, { from: line.from, to: prefixTo });
         }
 
-        if (cachedWidth !== undefined && cachedWidth > 0) {
-            builder.add(line.from, line.from, createLineDecoration(cachedWidth, this.linePaddingLeft));
+        const decorationWidth = cachedWidth ?? this.getCachedWidthForPrefix(prefix);
+        if (decorationWidth !== undefined && decorationWidth > 0) {
+            builder.add(line.from, line.from, createLineDecoration(decorationWidth, this.linePaddingLeft));
         }
 
         addTabReplacementDecorations(builder, line, prefix, this.view);
+    }
+
+    private getCachedWidthForPrefix(prefix: string): number | undefined {
+        const keySuffix = `:${prefix}`;
+        for (const [cacheKey, width] of this.cachedPrefixWidths) {
+            if (cacheKey === prefix || cacheKey.endsWith(keySuffix)) {
+                return width;
+            }
+        }
+
+        return undefined;
     }
 
     private scheduleMeasure(): void {

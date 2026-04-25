@@ -177,6 +177,29 @@ describe('wrappedLineIndentExtension', () => {
         view.destroy();
     });
 
+    it('keeps block quote lines decorated while remeasuring a new selection state', () => {
+        const view = createView('> - first quoted item');
+        coordsAtPosSpy.mockImplementation((position) => {
+            const line = view.state.doc.lineAt(position);
+            const left = position <= line.from + 1 ? 0 : 16;
+            return { left, right: left, top: 0, bottom: 16 };
+        });
+
+        flushMeasureCycle(view);
+        flushMeasureCycle(view);
+        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('26px');
+
+        view.dispatch({ selection: { anchor: view.state.doc.line(1).to } });
+
+        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('26px');
+
+        flushMeasureCycle(view);
+        flushMeasureCycle(view);
+        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('26px');
+
+        view.destroy();
+    });
+
     it('remeasures task list prefixes when selection changes checkbox visibility state', () => {
         const view = createView('- [ ] first task\n- [ ] second task');
         coordsAtPosSpy.mockImplementation((position) => {
