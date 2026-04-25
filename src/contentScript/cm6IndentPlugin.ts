@@ -111,7 +111,7 @@ function intersectsFoldedRange(state: EditorState, from: number, to: number): bo
     return intersects;
 }
 
-function isBlockCodeNode(nodeName: string): boolean {
+export function isBlockCodeNode(nodeName: string): boolean {
     return /^(?:CodeBlock|FencedCode|CodeInfo)$/i.test(nodeName);
 }
 
@@ -429,7 +429,7 @@ class WrappedLineIndentPlugin implements PluginValue {
     }
 }
 
-const wrappedLineIndentExtension = ViewPlugin.fromClass(WrappedLineIndentPlugin, {
+export const wrappedLineIndentExtension = ViewPlugin.fromClass(WrappedLineIndentPlugin, {
     decorations: (plugin) => plugin.decorations,
 });
 
