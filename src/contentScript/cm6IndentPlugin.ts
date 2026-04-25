@@ -1,134 +1,271 @@
-import { getIndentUnit } from '@codemirror/language';
-import { EditorState, Line, RangeSetBuilder } from '@codemirror/state';
+import { foldedRanges, syntaxTree } from '@codemirror/language';
+import { RangeSetBuilder, StateEffect, type EditorState, type Line } from '@codemirror/state';
 import {
     Decoration,
-    DecorationSet,
+    type DecorationSet,
     EditorView,
-    PluginValue,
+    type PluginValue,
     ViewPlugin,
-    ViewUpdate,
+    type ViewUpdate,
+    WidgetType,
 } from '@codemirror/view';
-import { CodeMirrorControl, MarkdownEditorContentScriptModule } from 'api/types';
+import type { SyntaxNode } from '@lezer/common';
 
-type IndentationInfo = {
-    containsTab: boolean;
-    numColumns: number;
-};
+const BASE_PADDING = 6;
 
-class WrappedLineIndent implements PluginValue {
-    public decorations: DecorationSet;
-    private indentUnit: number;
-    private readonly initialPaddingLeft: string;
-    private readonly isChrome: boolean;
+const measurementsChanged = StateEffect.define<void>();
+
+interface CodeMirrorWrapper {
+    cm6?: EditorView;
+    addExtension(extension: unknown): void;
+}
+
+interface PrefixMatch {
+    prefix: string;
+}
+
+interface MeasurementTarget {
+    from: number;
+    to: number;
+}
+
+type MeasureResult = Map<string, number>;
+
+class SpaceWidget extends WidgetType {
+    public toDOM(): HTMLElement {
+        const element = document.createElement('span');
+        element.textContent = ' ';
+        element.style.whiteSpace = 'pre';
+        return element;
+    }
+}
+
+const spaceWidget = new SpaceWidget();
+
+/**
+ * Prefix patterns:
+ * - `   text`
+ * - `  - item`, `  * [x] task`, `  12. item`, `  12) item`
+ * - `> quote`, `> > nested quote`, including indentation before `>`
+ */
+function getIndentPrefix(lineText: string): PrefixMatch | null {
+    const blockquoteMatch = /^([ \t]*(?:>[ \t]*)+)/.exec(lineText);
+    if (blockquoteMatch?.[1]) {
+        return { prefix: blockquoteMatch[1] };
+    }
+
+    const listMatch = /^([ \t]*(?:[-*+]|\d+[.)])[ \t]+(?:\[[ xX]\][ \t]+)?)/.exec(lineText);
+    if (listMatch?.[1]) {
+        return { prefix: listMatch[1] };
+    }
+
+    const whitespaceMatch = /^([ \t]+)/.exec(lineText);
+    if (whitespaceMatch?.[1]) {
+        return { prefix: whitespaceMatch[1] };
+    }
+
+    return null;
+}
+
+function intersectsFoldedRange(state: EditorState, from: number, to: number): boolean {
+    let intersects = false;
+    foldedRanges(state).between(from, to, (foldFrom, foldTo) => {
+        if (foldFrom < to && foldTo > from) {
+            intersects = true;
+            return false;
+        }
+
+        return undefined;
+    });
+
+    return intersects;
+}
+
+function isCodeLikeNode(nodeName: string): boolean {
+    return /^(?:InlineCode|CodeText|CodeBlock|FencedCode|CodeMark|CodeInfo|Code)$/i.test(nodeName);
+}
+
+function isInCodeLikeSyntax(state: EditorState, from: number, to: number): boolean {
+    const tree = syntaxTree(state);
+    let position = from;
+
+    while (position <= to) {
+        let node: SyntaxNode | null = tree.resolveInner(position, 1);
+        while (node) {
+            if (isCodeLikeNode(node.name)) {
+                return true;
+            }
+
+            node = node.parent;
+        }
+
+        if (position === to) {
+            break;
+        }
+
+        position = to;
+    }
+
+    return false;
+}
+
+function addTabReplacementDecorations(builder: RangeSetBuilder<Decoration>, line: Line, prefix: string): void {
+    for (let index = 0; index < prefix.length; index++) {
+        if (prefix[index] === '\t') {
+            builder.add(line.from + index, line.from + index + 1, Decoration.replace({ widget: spaceWidget }));
+        }
+    }
+}
+
+function createLineDecoration(width: number): Decoration {
+    const textIndent = Math.max(0, width - BASE_PADDING);
+
+    return Decoration.line({
+        attributes: {
+            style: `padding-left: ${width}px; text-indent: -${textIndent}px;`,
+        },
+    });
+}
+
+class WrappedLineIndentPlugin implements PluginValue {
+    public decorations: DecorationSet = Decoration.none;
+
+    private readonly cachedPrefixWidths = new Map<string, number>();
+
+    private readonly pendingMeasurements = new Map<string, MeasurementTarget>();
+
+    private measureScheduled = false;
 
     public constructor(private readonly view: EditorView) {
-        this.indentUnit = getIndentUnit(view.state);
-        this.initialPaddingLeft = this.measureInitialPaddingLeft();
-        this.isChrome = window.navigator.userAgent.includes('Chrome');
-        this.decorations = this.generate(view.state);
+        this.decorations = this.buildDecorations();
+        this.scheduleMeasure();
     }
 
     public update(update: ViewUpdate): void {
-        const indentUnit = getIndentUnit(update.state);
-
-        if (indentUnit !== this.indentUnit || update.docChanged || update.viewportChanged) {
-            this.indentUnit = indentUnit;
-            this.decorations = this.generate(update.state);
+        if (
+            update.docChanged ||
+            update.viewportChanged ||
+            update.geometryChanged ||
+            update.transactions.some((transaction) =>
+                transaction.effects.some((effect) => effect.is(measurementsChanged))
+            )
+        ) {
+            this.decorations = this.buildDecorations();
+            this.scheduleMeasure();
         }
     }
 
-    private generate(state: EditorState): DecorationSet {
+    public destroy(): void {
+        this.pendingMeasurements.clear();
+        this.cachedPrefixWidths.clear();
+    }
+
+    private buildDecorations(): DecorationSet {
         const builder = new RangeSetBuilder<Decoration>();
+        const state = this.view.state;
 
-        for (const line of this.getVisibleLines(state)) {
-            const { numColumns, containsTab } = WrappedLineIndent.numColumns(line.text, state.tabSize);
-            const wrappedIndent = numColumns + this.indentUnit;
-            const paddingValue = `calc(${wrappedIndent}ch + ${this.initialPaddingLeft})`;
-            const textIndentValue = this.isChrome
-                ? `calc(-${wrappedIndent}ch - ${containsTab ? 1 : 0}px)`
-                : `-${wrappedIndent}ch`;
+        this.pendingMeasurements.clear();
 
-            builder.add(
-                line.from,
-                line.from,
-                Decoration.line({
-                    attributes: {
-                        style: `padding-left: ${paddingValue}; text-indent: ${textIndentValue};`,
-                    },
-                })
-            );
+        for (const range of this.view.visibleRanges) {
+            let position = range.from;
+
+            while (position <= range.to) {
+                const line = state.doc.lineAt(position);
+                this.addDecorationsForLine(builder, line);
+
+                if (line.to >= range.to) {
+                    break;
+                }
+
+                position = line.to + 1;
+            }
         }
 
         return builder.finish();
     }
 
-    private measureInitialPaddingLeft(): string {
-        const lineElement = this.view.contentDOM.querySelector('.cm-line');
-
-        if (!lineElement) {
-            return '0px';
+    private addDecorationsForLine(builder: RangeSetBuilder<Decoration>, line: Line): void {
+        const match = getIndentPrefix(line.text);
+        if (!match) {
+            return;
         }
 
-        return window.getComputedStyle(lineElement).getPropertyValue('padding-left');
+        const prefixTo = line.from + match.prefix.length;
+        if (
+            intersectsFoldedRange(this.view.state, line.from, prefixTo) ||
+            isInCodeLikeSyntax(this.view.state, line.from, prefixTo)
+        ) {
+            return;
+        }
+
+        const cachedWidth = this.cachedPrefixWidths.get(match.prefix);
+        if (cachedWidth === undefined) {
+            this.pendingMeasurements.set(match.prefix, { from: line.from, to: prefixTo });
+        } else if (cachedWidth > 0) {
+            builder.add(line.from, line.from, createLineDecoration(cachedWidth));
+        }
+
+        addTabReplacementDecorations(builder, line, match.prefix);
     }
 
-    private getVisibleLines(state: EditorState): Set<Line> {
-        const lines = new Set<Line>();
-        let lastLine: Line | null = null;
+    private scheduleMeasure(): void {
+        if (this.measureScheduled || this.pendingMeasurements.size === 0) {
+            return;
+        }
 
-        for (const { from, to } of this.view.visibleRanges) {
-            let pos = from;
+        this.measureScheduled = true;
+        const targets = new Map(this.pendingMeasurements);
 
-            while (pos <= to) {
-                const line = state.doc.lineAt(pos);
+        this.view.requestMeasure<MeasureResult>({
+            read: (view) => this.measurePrefixes(view, targets),
+            write: (measuredWidths) => {
+                this.measureScheduled = false;
 
-                if (lastLine !== line) {
-                    lines.add(line);
-                    lastLine = line;
+                let changed = false;
+                for (const [prefix, width] of measuredWidths) {
+                    if (this.cachedPrefixWidths.get(prefix) !== width) {
+                        this.cachedPrefixWidths.set(prefix, width);
+                        changed = true;
+                    }
                 }
 
-                pos = line.to + 1;
-            }
-        }
-
-        return lines;
+                if (changed) {
+                    this.view.dispatch({ effects: measurementsChanged.of() });
+                }
+            },
+        });
     }
 
-    private static numColumns(str: string, tabSize: number): IndentationInfo {
-        let cols = 0;
-        let containsTab = false;
+    private measurePrefixes(view: EditorView, targets: Map<string, MeasurementTarget>): MeasureResult {
+        const measuredWidths: MeasureResult = new Map();
 
-        for (let i = 0; i < str.length; i++) {
-            switch (str[i]) {
-                case ' ':
-                    cols += 1;
-                    break;
+        for (const [prefix, target] of targets) {
+            const startCoords = view.coordsAtPos(target.from, 1);
+            const endCoords = view.coordsAtPos(target.to, -1);
 
-                case '\t':
-                    cols += tabSize - (cols % tabSize);
-                    containsTab = true;
-                    break;
-
-                case '\r':
-                    break;
-
-                default:
-                    return { containsTab, numColumns: cols };
+            if (!startCoords || !endCoords) {
+                continue;
             }
+
+            measuredWidths.set(prefix, Math.max(0, endCoords.left - startCoords.left));
         }
 
-        return { containsTab, numColumns: cols };
+        return measuredWidths;
     }
 }
 
-const wrappedLineIndent = ViewPlugin.fromClass(WrappedLineIndent, {
-    decorations: (plugin: WrappedLineIndent): DecorationSet => plugin.decorations,
+const wrappedLineIndentExtension = ViewPlugin.fromClass(WrappedLineIndentPlugin, {
+    decorations: (plugin) => plugin.decorations,
 });
 
-export default function (): MarkdownEditorContentScriptModule {
+export default () => {
     return {
-        plugin: (editorControl: CodeMirrorControl): void => {
-            editorControl.addExtension(wrappedLineIndent);
+        plugin: (codeMirrorWrapper: CodeMirrorWrapper) => {
+            if (!codeMirrorWrapper.cm6) {
+                return;
+            }
+
+            codeMirrorWrapper.addExtension(wrappedLineIndentExtension);
         },
     };
-}
+};
