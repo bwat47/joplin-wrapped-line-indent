@@ -118,11 +118,11 @@ function addTabReplacementDecorations(builder: RangeSetBuilder<Decoration>, line
 }
 
 function createLineDecoration(width: number): Decoration {
-    const textIndent = Math.max(0, width - BASE_PADDING);
+    const paddingLeft = width + BASE_PADDING;
 
     return Decoration.line({
         attributes: {
-            style: `padding-left: ${width}px; text-indent: -${textIndent}px;`,
+            style: `padding-left: ${paddingLeft}px; text-indent: -${width}px;`,
         },
     });
 }
