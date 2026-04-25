@@ -1,5 +1,5 @@
 import { foldedRanges, syntaxTree } from '@codemirror/language';
-import { RangeSetBuilder, StateEffect, countColumn, type EditorState, type Line } from '@codemirror/state';
+import { RangeSetBuilder, StateEffect, countColumn, type EditorState, type Line, type Text } from '@codemirror/state';
 import {
     Decoration,
     type DecorationSet,
@@ -12,6 +12,7 @@ import {
 import type { SyntaxNode } from '@lezer/common';
 
 const BASE_PADDING = 6;
+const MAX_MEASUREMENT_RETRIES = 20;
 
 const measurementsChanged = StateEffect.define<void>();
 
@@ -29,7 +30,11 @@ interface MeasurementTarget {
     to: number;
 }
 
-type MeasureResult = Map<string, number>;
+interface MeasureReadResult {
+    isStale: boolean;
+    needsRetry: boolean;
+    widths: Map<string, number>;
+}
 
 class TabWidget extends WidgetType {
     public constructor(private readonly width: number) {
@@ -159,6 +164,10 @@ function createLineDecoration(width: number): Decoration {
     });
 }
 
+function getMeasurementSignature(view: EditorView): string {
+    return [view.defaultCharacterWidth, view.defaultLineHeight, view.scaleX, view.scaleY].join(':');
+}
+
 class WrappedLineIndentPlugin implements PluginValue {
     public decorations: DecorationSet = Decoration.none;
 
@@ -168,13 +177,28 @@ class WrappedLineIndentPlugin implements PluginValue {
 
     private measureScheduled = false;
 
+    private measurementSignature: string;
+
+    private measurementRetries = 0;
+
+    private refreshFrame: number | null = null;
+
     public constructor(private readonly view: EditorView) {
+        this.measurementSignature = getMeasurementSignature(view);
         this.decorations = this.buildDecorations();
         this.scheduleMeasure();
     }
 
     public update(update: ViewUpdate): void {
+        const nextMeasurementSignature = getMeasurementSignature(this.view);
+        const measurementsNeedRefresh = nextMeasurementSignature !== this.measurementSignature;
+        if (measurementsNeedRefresh) {
+            this.measurementSignature = nextMeasurementSignature;
+            this.cachedPrefixWidths.clear();
+        }
+
         if (
+            measurementsNeedRefresh ||
             update.docChanged ||
             update.viewportChanged ||
             update.geometryChanged ||
@@ -188,6 +212,11 @@ class WrappedLineIndentPlugin implements PluginValue {
     }
 
     public destroy(): void {
+        if (this.refreshFrame !== null) {
+            cancelAnimationFrame(this.refreshFrame);
+            this.refreshFrame = null;
+        }
+
         this.pendingMeasurements.clear();
         this.cachedPrefixWidths.clear();
     }
@@ -247,14 +276,21 @@ class WrappedLineIndentPlugin implements PluginValue {
 
         this.measureScheduled = true;
         const targets = new Map(this.pendingMeasurements);
+        const measuredDoc = this.view.state.doc;
 
-        this.view.requestMeasure<MeasureResult>({
-            read: (view) => this.measurePrefixes(view, targets),
-            write: (measuredWidths) => {
+        this.view.requestMeasure<MeasureReadResult>({
+            read: (view) => this.measurePrefixes(view, targets, measuredDoc),
+            write: (result) => {
                 this.measureScheduled = false;
 
+                if (result.isStale) {
+                    this.measurementRetries = 0;
+                    this.scheduleMeasure();
+                    return;
+                }
+
                 let changed = false;
-                for (const [prefix, width] of measuredWidths) {
+                for (const [prefix, width] of result.widths) {
                     if (this.cachedPrefixWidths.get(prefix) !== width) {
                         this.cachedPrefixWidths.set(prefix, width);
                         changed = true;
@@ -262,27 +298,59 @@ class WrappedLineIndentPlugin implements PluginValue {
                 }
 
                 if (changed) {
-                    this.view.dispatch({ effects: measurementsChanged.of() });
+                    this.measurementRetries = 0;
+                    this.scheduleDecorationsRefresh();
+                    return;
                 }
+
+                if (result.needsRetry && this.measurementRetries < MAX_MEASUREMENT_RETRIES) {
+                    this.measurementRetries++;
+                    this.scheduleMeasure();
+                    return;
+                }
+
+                this.measurementRetries = 0;
             },
         });
     }
 
-    private measurePrefixes(view: EditorView, targets: Map<string, MeasurementTarget>): MeasureResult {
-        const measuredWidths: MeasureResult = new Map();
+    private scheduleDecorationsRefresh(): void {
+        if (this.refreshFrame !== null) {
+            return;
+        }
 
+        this.refreshFrame = requestAnimationFrame(() => {
+            this.refreshFrame = null;
+            this.view.dispatch({ effects: measurementsChanged.of() });
+        });
+    }
+
+    private measurePrefixes(view: EditorView, targets: Map<string, MeasurementTarget>, measuredDoc: Text): MeasureReadResult {
+        const measuredWidths = new Map<string, number>();
+        if (view.state.doc !== measuredDoc) {
+            return { isStale: true, needsRetry: false, widths: measuredWidths };
+        }
+
+        let needsRetry = false;
         for (const [prefix, target] of targets) {
             const startCoords = view.coordsAtPos(target.from, 1);
             const endCoords = view.coordsAtPos(target.to, -1);
 
             if (!startCoords || !endCoords) {
+                needsRetry = true;
                 continue;
             }
 
-            measuredWidths.set(prefix, Math.max(0, endCoords.left - startCoords.left));
+            const width = endCoords.left - startCoords.left;
+            if (width <= 0) {
+                needsRetry = true;
+                continue;
+            }
+
+            measuredWidths.set(prefix, width);
         }
 
-        return measuredWidths;
+        return { isStale: false, needsRetry, widths: measuredWidths };
     }
 }
 
