@@ -29,10 +29,6 @@ interface CodeMirrorWrapper {
     addExtension(extension: unknown): void;
 }
 
-interface PrefixMatch {
-    prefix: string;
-}
-
 interface MeasurementTarget {
     from: number;
     to: number;
@@ -79,27 +75,27 @@ export function getTabReplacementWidth(textBeforeTab: string, tabSize: number, c
  * - `> quote`, `> > nested quote`, including indentation before `>`
  * - `> - item`, `> > 1. nested item`, including the list marker after the quote prefix
  */
-export function getIndentPrefix(lineText: string): PrefixMatch | null {
+export function getIndentPrefix(lineText: string): string | null {
     const blockquoteMatch = /^([ \t]*(?:>[ \t]*)+)/.exec(lineText);
     if (blockquoteMatch?.[1]) {
         const listMatch = /^([ \t]*(?:[-*+]|\d+[.)])[ \t]+(?:\[[ xX]\][ \t]+)?)/.exec(
             lineText.slice(blockquoteMatch[1].length)
         );
         if (listMatch?.[1]) {
-            return { prefix: blockquoteMatch[1] + listMatch[1] };
+            return blockquoteMatch[1] + listMatch[1];
         }
 
-        return { prefix: blockquoteMatch[1] };
+        return blockquoteMatch[1];
     }
 
     const listMatch = /^([ \t]*(?:[-*+]|\d+[.)])[ \t]+(?:\[[ xX]\][ \t]+)?)/.exec(lineText);
     if (listMatch?.[1]) {
-        return { prefix: listMatch[1] };
+        return listMatch[1];
     }
 
     const whitespaceMatch = /^([ \t]+)/.exec(lineText);
     if (whitespaceMatch?.[1]) {
-        return { prefix: whitespaceMatch[1] };
+        return whitespaceMatch[1];
     }
 
     return null;
@@ -125,9 +121,8 @@ export function isBlockCodeNode(nodeName: string): boolean {
 
 function isInBlockCodeSyntax(state: EditorState, from: number, to: number): boolean {
     const tree = syntaxTree(state);
-    let position = from;
 
-    while (position <= to) {
+    for (const position of from === to ? [from] : [from, to]) {
         let node: SyntaxNode | null = tree.resolveInner(position, 1);
         while (node) {
             if (isBlockCodeNode(node.name)) {
@@ -136,12 +131,6 @@ function isInBlockCodeSyntax(state: EditorState, from: number, to: number): bool
 
             node = node.parent;
         }
-
-        if (position === to) {
-            break;
-        }
-
-        position = to;
     }
 
     return false;
@@ -303,12 +292,12 @@ class WrappedLineIndentPlugin implements PluginValue {
     }
 
     private addDecorationsForLine(builder: RangeSetBuilder<Decoration>, line: Line): void {
-        const match = getIndentPrefix(line.text);
-        if (!match) {
+        const prefix = getIndentPrefix(line.text);
+        if (!prefix) {
             return;
         }
 
-        const prefixTo = line.from + match.prefix.length;
+        const prefixTo = line.from + prefix.length;
         if (
             intersectsFoldedRange(this.view.state, line.from, prefixTo) ||
             isInBlockCodeSyntax(this.view.state, line.from, prefixTo)
@@ -316,7 +305,7 @@ class WrappedLineIndentPlugin implements PluginValue {
             return;
         }
 
-        const cacheKey = getPrefixCacheKey(match.prefix, line, this.view.state);
+        const cacheKey = getPrefixCacheKey(prefix, line, this.view.state);
         const cachedWidth = this.cachedPrefixWidths.get(cacheKey);
         if (cachedWidth === undefined) {
             this.pendingMeasurements.set(cacheKey, { from: line.from, to: prefixTo });
@@ -326,7 +315,7 @@ class WrappedLineIndentPlugin implements PluginValue {
             builder.add(line.from, line.from, createLineDecoration(cachedWidth, this.linePaddingLeft));
         }
 
-        addTabReplacementDecorations(builder, line, match.prefix, this.view);
+        addTabReplacementDecorations(builder, line, prefix, this.view);
     }
 
     private scheduleMeasure(): void {
