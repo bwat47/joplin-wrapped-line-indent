@@ -1,5 +1,6 @@
-# Joplin Plugin
+> [!note]
+> This plugin was created entirely with AI tools
 
-This is your new Joplin plugin. It is suggested that you use this README file to document your plugin.
+# Wrapped line indent
 
-For information on how to build or publish the plugin, please see [GENERATOR_DOC.md](./GENERATOR_DOC.md)
+A joplin plugin that indents wrapped lines in the markdown editor.
