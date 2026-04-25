@@ -121,6 +121,75 @@ describe('wrappedLineIndentExtension', () => {
         view.destroy();
     });
 
+    it('keeps separate widths for visible and hidden block quote markers', () => {
+        const view = createView('> - active item\n> - hidden item');
+        const firstLine = view.state.doc.line(1);
+        const secondLine = view.state.doc.line(2);
+
+        coordsAtPosSpy.mockImplementation((position) => {
+            if (position <= firstLine.to) {
+                const left = (position - firstLine.from) * 8;
+                return { left, right: left, top: 0, bottom: 16 };
+            }
+
+            const left = (position - secondLine.from) * 4;
+            return { left, right: left, top: 16, bottom: 32 };
+        });
+
+        flushMeasureCycle(view);
+
+        const lineElements = [...view.dom.querySelectorAll<HTMLElement>('.cm-wrapped-line-indent')];
+        expect(lineElements.map((lineElement) => lineElement.style.paddingLeft)).toEqual(['42px', '26px']);
+        expect(lineElements.map((lineElement) => lineElement.style.textIndent)).toEqual(['-32px', '-16px']);
+
+        view.destroy();
+    });
+
+    it('remeasures block quote prefixes when selection changes marker visibility state', () => {
+        const view = createView('> - first quoted item\n> - second quoted item');
+        coordsAtPosSpy.mockImplementation((position) => {
+            const line = view.state.doc.lineAt(position);
+            const hasSelectionOnLine = view.state.selection.ranges.some(
+                (range) => range.from <= line.to && range.to >= line.from
+            );
+            const characterWidth = hasSelectionOnLine ? 8 : 4;
+            const left = position <= line.from + 1 ? 0 : 4 * characterWidth;
+            return { left, right: left, top: 0, bottom: 16 };
+        });
+
+        view.dispatch({ selection: { anchor: view.state.doc.line(1).from, head: view.state.doc.line(2).to } });
+        flushMeasureCycle(view);
+        flushMeasureCycle(view);
+        expect(
+            [...view.dom.querySelectorAll<HTMLElement>('.cm-wrapped-line-indent')].map((line) => line.style.paddingLeft)
+        ).toEqual(['38px', '38px']);
+
+        view.dispatch({ selection: { anchor: view.state.doc.line(2).to } });
+        flushMeasureCycle(view);
+        flushMeasureCycle(view);
+
+        expect(
+            [...view.dom.querySelectorAll<HTMLElement>('.cm-wrapped-line-indent')].map((line) => line.style.paddingLeft)
+        ).toEqual(['22px', '38px']);
+
+        view.destroy();
+    });
+
+    it('does not remeasure unchanged block quote list lines after same-line edits', () => {
+        const view = createView('> - first quoted item\n> - second quoted item');
+        flushMeasureCycle(view);
+        coordsAtPosSpy.mockClear();
+
+        view.dispatch({
+            changes: { from: view.state.doc.line(1).to, insert: 'x' },
+        });
+
+        expect(view.dom.querySelectorAll<HTMLElement>('.cm-wrapped-line-indent')).toHaveLength(2);
+        expect(coordsAtPosSpy).not.toHaveBeenCalled();
+
+        view.destroy();
+    });
+
     it('does not dispatch a refresh from a pending measure after plugin destruction', () => {
         const view = createView('- item');
         const dispatchSpy = jest.spyOn(view, 'dispatch');

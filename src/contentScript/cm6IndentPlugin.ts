@@ -1,5 +1,13 @@
 import { foldedRanges, syntaxTree } from '@codemirror/language';
-import { RangeSetBuilder, StateEffect, countColumn, type EditorState, type Line, type Text } from '@codemirror/state';
+import {
+    RangeSetBuilder,
+    StateEffect,
+    countColumn,
+    type EditorSelection,
+    type EditorState,
+    type Line,
+    type Text,
+} from '@codemirror/state';
 import {
     Decoration,
     type DecorationSet,
@@ -180,6 +188,23 @@ function createLineDecoration(width: number, linePaddingLeft: number): Decoratio
     });
 }
 
+function isMarkupVisibilitySensitivePrefix(prefix: string): boolean {
+    return prefix.includes('>');
+}
+
+function hasSelectionOnLine(state: EditorState, line: Line): boolean {
+    return state.selection.ranges.some((range) => range.from <= line.to && range.to >= line.from);
+}
+
+function getPrefixCacheKey(prefix: string, line: Line, state: EditorState): string {
+    if (!isMarkupVisibilitySensitivePrefix(prefix)) {
+        return prefix;
+    }
+
+    const selectionState = hasSelectionOnLine(state, line) ? 'selected' : 'unselected';
+    return `${selectionState}:${prefix}`;
+}
+
 function getMeasurementSignature(view: EditorView): string {
     return [view.defaultCharacterWidth, view.defaultLineHeight, view.scaleX, view.scaleY].join(':');
 }
@@ -223,6 +248,8 @@ class WrappedLineIndentPlugin implements PluginValue {
         if (
             measurementsNeedRefresh ||
             update.docChanged ||
+            update.selectionSet ||
+            update.focusChanged ||
             update.viewportChanged ||
             update.geometryChanged ||
             update.transactions.some((transaction) =>
@@ -289,10 +316,13 @@ class WrappedLineIndentPlugin implements PluginValue {
             return;
         }
 
-        const cachedWidth = this.cachedPrefixWidths.get(match.prefix);
+        const cacheKey = getPrefixCacheKey(match.prefix, line, this.view.state);
+        const cachedWidth = this.cachedPrefixWidths.get(cacheKey);
         if (cachedWidth === undefined) {
-            this.pendingMeasurements.set(match.prefix, { from: line.from, to: prefixTo });
-        } else if (cachedWidth > 0) {
+            this.pendingMeasurements.set(cacheKey, { from: line.from, to: prefixTo });
+        }
+
+        if (cachedWidth !== undefined && cachedWidth > 0) {
             builder.add(line.from, line.from, createLineDecoration(cachedWidth, this.linePaddingLeft));
         }
 
@@ -311,6 +341,7 @@ class WrappedLineIndentPlugin implements PluginValue {
         this.measureScheduled = true;
         const targets = new Map(this.pendingMeasurements);
         const measuredDoc = this.view.state.doc;
+        const measuredSelection = this.view.state.selection;
 
         this.view.requestMeasure<MeasureReadResult>({
             read: (view) => {
@@ -318,7 +349,7 @@ class WrappedLineIndentPlugin implements PluginValue {
                     return this.createEmptyMeasureResult();
                 }
 
-                return this.measurePrefixes(view, targets, measuredDoc, this.linePaddingLeft);
+                return this.measurePrefixes(view, targets, measuredDoc, measuredSelection, this.linePaddingLeft);
             },
             write: (result) => {
                 if (this.destroyed) {
@@ -398,16 +429,17 @@ class WrappedLineIndentPlugin implements PluginValue {
         view: EditorView,
         targets: Map<string, MeasurementTarget>,
         measuredDoc: Text,
+        measuredSelection: EditorSelection,
         fallbackPaddingLeft: number
     ): MeasureReadResult {
         const measuredWidths = new Map<string, number>();
         const linePaddingLeft = getLinePaddingLeft(view, fallbackPaddingLeft);
-        if (view.state.doc !== measuredDoc) {
+        if (view.state.doc !== measuredDoc || view.state.selection !== measuredSelection) {
             return { linePaddingLeft, isStale: true, needsRetry: false, widths: measuredWidths };
         }
 
         let needsRetry = false;
-        for (const [prefix, target] of targets) {
+        for (const [cacheKey, target] of targets) {
             const startCoords = view.coordsAtPos(target.from, 1);
             const endCoords = view.coordsAtPos(target.to, -1);
 
@@ -422,7 +454,7 @@ class WrappedLineIndentPlugin implements PluginValue {
                 continue;
             }
 
-            measuredWidths.set(prefix, width);
+            measuredWidths.set(cacheKey, width);
         }
 
         return { linePaddingLeft, isStale: false, needsRetry, widths: measuredWidths };
