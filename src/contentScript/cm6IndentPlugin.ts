@@ -21,6 +21,7 @@ import type { SyntaxNode } from '@lezer/common';
 
 const MAX_MEASUREMENT_RETRIES = 20;
 const WRAPPED_LINE_CLASS = 'cm-wrapped-line-indent';
+const TASK_LIST_CHECKBOX_SUFFIX = /\[[ xX]\][ \t]+$/;
 
 const measurementsChanged = StateEffect.define<void>();
 
@@ -178,11 +179,11 @@ function createLineDecoration(width: number, linePaddingLeft: number): Decoratio
 }
 
 function isMarkupVisibilitySensitivePrefix(prefix: string): boolean {
-    return prefix.includes('>');
+    return prefix.includes('>') || TASK_LIST_CHECKBOX_SUFFIX.test(prefix);
 }
 
-function hasSelectionOnLine(state: EditorState, line: Line): boolean {
-    return state.selection.ranges.some((range) => range.from <= line.to && range.to >= line.from);
+function hasSelectionInRange(state: EditorState, from: number, to: number): boolean {
+    return state.selection.ranges.some((range) => range.from <= to && range.to >= from);
 }
 
 function getPrefixCacheKey(prefix: string, line: Line, state: EditorState): string {
@@ -190,8 +191,17 @@ function getPrefixCacheKey(prefix: string, line: Line, state: EditorState): stri
         return prefix;
     }
 
-    const selectionState = hasSelectionOnLine(state, line) ? 'selected' : 'unselected';
-    return `${selectionState}:${prefix}`;
+    const states: string[] = [];
+    if (prefix.includes('>')) {
+        states.push(`quote:${hasSelectionInRange(state, line.from, line.to) ? 'selected' : 'unselected'}`);
+    }
+
+    if (TASK_LIST_CHECKBOX_SUFFIX.test(prefix)) {
+        const prefixTo = line.from + prefix.length;
+        states.push(`task:${hasSelectionInRange(state, line.from, prefixTo) ? 'selected' : 'unselected'}`);
+    }
+
+    return `${states.join(':')}:${prefix}`;
 }
 
 function getMeasurementSignature(view: EditorView): string {

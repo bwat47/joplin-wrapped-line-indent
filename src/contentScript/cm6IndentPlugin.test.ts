@@ -177,6 +177,63 @@ describe('wrappedLineIndentExtension', () => {
         view.destroy();
     });
 
+    it('remeasures task list prefixes when selection changes checkbox visibility state', () => {
+        const view = createView('- [ ] first task\n- [ ] second task');
+        coordsAtPosSpy.mockImplementation((position) => {
+            const line = view.state.doc.lineAt(position);
+            const prefixTo = line.from + '- [ ] '.length;
+            const hasSelectionInPrefix = view.state.selection.ranges.some(
+                (range) => range.from <= prefixTo && range.to >= line.from
+            );
+            const prefixWidth = hasSelectionInPrefix ? 48 : 24;
+            const left = position <= line.from + 1 ? 0 : prefixWidth;
+            return { left, right: left, top: 0, bottom: 16 };
+        });
+
+        view.dispatch({ selection: { anchor: view.state.doc.line(1).from, head: view.state.doc.line(2).to } });
+        flushMeasureCycle(view);
+        flushMeasureCycle(view);
+        expect(
+            [...view.dom.querySelectorAll<HTMLElement>('.cm-wrapped-line-indent')].map((line) => line.style.paddingLeft)
+        ).toEqual(['54px', '54px']);
+
+        view.dispatch({ selection: { anchor: view.state.doc.line(2).to } });
+        flushMeasureCycle(view);
+        flushMeasureCycle(view);
+
+        expect(
+            [...view.dom.querySelectorAll<HTMLElement>('.cm-wrapped-line-indent')].map((line) => line.style.paddingLeft)
+        ).toEqual(['30px', '30px']);
+
+        view.destroy();
+    });
+
+    it('keeps rendered task checkbox width when the cursor is in task text', () => {
+        const view = createView('\n- [ ] first task');
+        coordsAtPosSpy.mockImplementation((position) => {
+            const line = view.state.doc.lineAt(position);
+            const prefixTo = line.from + '- [ ] '.length;
+            const hasSelectionInPrefix = view.state.selection.ranges.some(
+                (range) => range.from <= prefixTo && range.to >= line.from
+            );
+            const prefixWidth = hasSelectionInPrefix ? 48 : 24;
+            const left = position <= line.from + 1 ? 0 : prefixWidth;
+            return { left, right: left, top: 0, bottom: 16 };
+        });
+
+        flushMeasureCycle(view);
+        flushMeasureCycle(view);
+        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('34px');
+
+        view.dispatch({ selection: { anchor: view.state.doc.line(2).from + '- [ ] first'.length } });
+        flushMeasureCycle(view);
+        flushMeasureCycle(view);
+
+        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('34px');
+
+        view.destroy();
+    });
+
     it('does not remeasure unchanged block quote list lines after same-line edits', () => {
         const view = createView('> - first quoted item\n> - second quoted item');
         flushMeasureCycle(view);
