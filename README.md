@@ -22,6 +22,10 @@ The plugin skips fenced and indented code blocks.
 
 Works with/without Joplin's render markup enabled and whether you're using tabs/spaces for Indentation.
 
+### Screenshot example
+
+![example image](https://github.com/bwat47/joplin-wrapped-line-indent/blob/main/images/screenshot1.png?raw=true)
+
 ## Requirements
 
 - Joplin 3.3 or newer
