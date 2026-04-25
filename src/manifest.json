@@ -1,0 +1,16 @@
+{
+	"manifest_version": 1,
+	"id": "com.bwat47.joplin-wrapped-line-indent",
+	"app_min_version": "3.3",
+	"version": "1.0.0",
+	"name": "Wrapped Line Indentation",
+	"description": "Indent wrapped lines in the markdown editor",
+	"author": "bwat47",
+	"homepage_url": "https://github.com/bwat47/joplin-wrapped-line-indent",
+	"repository_url": "https://github.com/bwat47/joplin-wrapped-line-indent",
+	"keywords": [],
+	"categories": [],
+	"screenshots": [],
+	"icons": {},
+	"promo_tile": {}
+}

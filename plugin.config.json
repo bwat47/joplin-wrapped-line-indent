@@ -1,0 +1,5 @@
+{
+	"extraScripts": [
+        "contentScript/cm6IndentPlugin.ts"
+    ]
+}
