@@ -1,5 +1,5 @@
 import { foldedRanges, syntaxTree } from '@codemirror/language';
-import { RangeSetBuilder, StateEffect, type EditorState, type Line } from '@codemirror/state';
+import { RangeSetBuilder, StateEffect, countColumn, type EditorState, type Line } from '@codemirror/state';
 import {
     Decoration,
     type DecorationSet,
@@ -31,16 +31,32 @@ interface MeasurementTarget {
 
 type MeasureResult = Map<string, number>;
 
-class SpaceWidget extends WidgetType {
+class TabWidget extends WidgetType {
+    public constructor(private readonly width: number) {
+        super();
+    }
+
+    public eq(other: WidgetType): boolean {
+        return other instanceof TabWidget && other.width === this.width;
+    }
+
     public toDOM(): HTMLElement {
         const element = document.createElement('span');
-        element.textContent = ' ';
-        element.style.whiteSpace = 'pre';
+        element.textContent = '\t';
+        element.className = 'cm-tab';
+        element.style.width = `${this.width}px`;
         return element;
+    }
+
+    public ignoreEvent(): boolean {
+        return false;
     }
 }
 
-const spaceWidget = new SpaceWidget();
+export function getTabReplacementWidth(textBeforeTab: string, tabSize: number, characterWidth: number): number {
+    const column = countColumn(textBeforeTab, tabSize);
+    return (tabSize - (column % tabSize)) * characterWidth;
+}
 
 /**
  * Prefix patterns:
@@ -117,10 +133,18 @@ function isInCodeLikeSyntax(state: EditorState, from: number, to: number): boole
     return false;
 }
 
-function addTabReplacementDecorations(builder: RangeSetBuilder<Decoration>, line: Line, prefix: string): void {
+function addTabReplacementDecorations(
+    builder: RangeSetBuilder<Decoration>,
+    line: Line,
+    prefix: string,
+    view: EditorView
+): void {
+    const characterWidth = view.defaultCharacterWidth / view.scaleX;
+
     for (let index = 0; index < prefix.length; index++) {
         if (prefix[index] === '\t') {
-            builder.add(line.from + index, line.from + index + 1, Decoration.replace({ widget: spaceWidget }));
+            const width = getTabReplacementWidth(prefix.slice(0, index), view.state.tabSize, characterWidth);
+            builder.add(line.from + index, line.from + index + 1, Decoration.replace({ widget: new TabWidget(width) }));
         }
     }
 }
@@ -213,7 +237,7 @@ class WrappedLineIndentPlugin implements PluginValue {
             builder.add(line.from, line.from, createLineDecoration(cachedWidth));
         }
 
-        addTabReplacementDecorations(builder, line, match.prefix);
+        addTabReplacementDecorations(builder, line, match.prefix, this.view);
     }
 
     private scheduleMeasure(): void {

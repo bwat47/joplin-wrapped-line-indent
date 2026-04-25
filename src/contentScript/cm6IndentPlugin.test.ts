@@ -1,4 +1,4 @@
-import { getIndentPrefix } from './cm6IndentPlugin';
+import { getIndentPrefix, getTabReplacementWidth } from './cm6IndentPlugin';
 
 describe('getIndentPrefix', () => {
     it('includes list markers inside block quotes', () => {
@@ -10,5 +10,14 @@ describe('getIndentPrefix', () => {
     it('keeps quote-only prefixes for regular block quote lines', () => {
         expect(getIndentPrefix('> quoted text')?.prefix).toBe('> ');
         expect(getIndentPrefix('> > nested quoted text')?.prefix).toBe('> > ');
+    });
+});
+
+describe('getTabReplacementWidth', () => {
+    it('expands tabs to the next editor tab stop', () => {
+        expect(getTabReplacementWidth('', 4, 10)).toBe(40);
+        expect(getTabReplacementWidth('  ', 4, 10)).toBe(20);
+        expect(getTabReplacementWidth('\t', 4, 10)).toBe(40);
+        expect(getTabReplacementWidth('\t- ', 4, 10)).toBe(20);
     });
 });
