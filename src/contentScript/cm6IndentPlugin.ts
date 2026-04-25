@@ -187,6 +187,8 @@ function getMeasurementSignature(view: EditorView): string {
 class WrappedLineIndentPlugin implements PluginValue {
     public decorations: DecorationSet = Decoration.none;
 
+    private destroyed = false;
+
     private readonly cachedPrefixWidths = new Map<string, number>();
 
     private readonly pendingMeasurements = new Map<string, MeasurementTarget>();
@@ -237,6 +239,9 @@ class WrappedLineIndentPlugin implements PluginValue {
     }
 
     public destroy(): void {
+        this.destroyed = true;
+        this.measureScheduled = false;
+
         if (this.refreshFrame !== null) {
             cancelAnimationFrame(this.refreshFrame);
             this.refreshFrame = null;
@@ -295,6 +300,10 @@ class WrappedLineIndentPlugin implements PluginValue {
     }
 
     private scheduleMeasure(): void {
+        if (this.destroyed) {
+            return;
+        }
+
         if (this.measureScheduled || (this.pendingMeasurements.size === 0 && !this.linePaddingMeasurementNeeded)) {
             return;
         }
@@ -304,8 +313,18 @@ class WrappedLineIndentPlugin implements PluginValue {
         const measuredDoc = this.view.state.doc;
 
         this.view.requestMeasure<MeasureReadResult>({
-            read: (view) => this.measurePrefixes(view, targets, measuredDoc, this.linePaddingLeft),
+            read: (view) => {
+                if (this.destroyed) {
+                    return this.createEmptyMeasureResult();
+                }
+
+                return this.measurePrefixes(view, targets, measuredDoc, this.linePaddingLeft);
+            },
             write: (result) => {
+                if (this.destroyed) {
+                    return;
+                }
+
                 this.measureScheduled = false;
 
                 if (result.isStale) {
@@ -348,14 +367,31 @@ class WrappedLineIndentPlugin implements PluginValue {
     }
 
     private scheduleDecorationsRefresh(): void {
+        if (this.destroyed) {
+            return;
+        }
+
         if (this.refreshFrame !== null) {
             return;
         }
 
         this.refreshFrame = requestAnimationFrame(() => {
             this.refreshFrame = null;
+            if (this.destroyed) {
+                return;
+            }
+
             this.view.dispatch({ effects: measurementsChanged.of() });
         });
+    }
+
+    private createEmptyMeasureResult(): MeasureReadResult {
+        return {
+            linePaddingLeft: this.linePaddingLeft,
+            isStale: false,
+            needsRetry: false,
+            widths: new Map<string, number>(),
+        };
     }
 
     private measurePrefixes(
