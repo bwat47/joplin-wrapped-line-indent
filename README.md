@@ -20,7 +20,11 @@ Examples handled:
 
 The plugin skips fenced and indented code blocks.
 
-Works with/without Joplin's render markup enabled and whether you're using tabs/spaces for Indentation.
+### Compatibility
+
+- Works with/without Joplin's render markup enabled.
+- Works whether you're using tabs or spaces for Indentation (or mixed tabs/spaces).
+- Works with proportional fonts.
 
 ### Screenshot example
 
@@ -33,7 +37,7 @@ Works with/without Joplin's render markup enabled and whether you're using tabs/
 
 ## Installation
 
-Install from Joplin’s plugin manager once published, or install the `.jpl` file manually:
+Install from Joplin’s plugin manager, or install the `.jpl` file manually:
 
 1. Download `com.bwat47.joplin-wrapped-line-indent.jpl` from the latest release.
 2. In Joplin, open `Tools > Options > Plugins`.
