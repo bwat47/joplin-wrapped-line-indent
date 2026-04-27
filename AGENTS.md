@@ -1,3 +1,7 @@
+## Project architecture overview
+
+ARCHITECTURE.md
+
 ## Build, Test, and Development Commands
 
 - `npm run dist` Build plugin and create archive at `publish/*.jpl`.
