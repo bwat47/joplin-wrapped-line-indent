@@ -54,5 +54,4 @@ This plugin changes editor display only. It does not modify note content.
 npm test
 npm run lint
 npm run dist
-
 ```
