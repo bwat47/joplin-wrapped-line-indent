@@ -290,6 +290,19 @@ describe('wrappedLineIndentExtension', () => {
         view.destroy();
     });
 
+    it('keeps list lines decorated immediately after indenting to an unmeasured prefix', () => {
+        const view = createView('- item');
+        flushMeasureCycle(view);
+
+        view.dispatch({
+            changes: { from: view.state.doc.line(1).from, insert: '  ' },
+        });
+
+        expect(view.dom.querySelectorAll<HTMLElement>('.cm-wrapped-line-indent')).toHaveLength(1);
+
+        view.destroy();
+    });
+
     it('skips fenced and indented code blocks using markdown syntax parsing', () => {
         const view = createView(
             '- list item\n\n```\n- fenced code\n```\n\n    - indented code\n\n- another list item',
