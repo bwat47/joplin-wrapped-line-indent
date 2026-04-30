@@ -32,7 +32,7 @@ The plugin skips fenced and indented code blocks.
 
 ## Requirements
 
-- Joplin 3.3 or newer
+- Joplin 3.5 or newer
 - Markdown editor using CodeMirror 6
 
 ## Installation
