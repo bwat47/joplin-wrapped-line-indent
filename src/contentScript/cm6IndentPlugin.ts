@@ -22,6 +22,7 @@ import type { SyntaxNode } from '@lezer/common';
 const MAX_MEASUREMENT_RETRIES = 20;
 const WRAPPED_LINE_CLASS = 'cm-wrapped-line-indent';
 const TASK_LIST_CHECKBOX_SUFFIX = /\[[ xX]\][ \t]+$/;
+const LEGACY_TASK_MARKER_SELECTOR = '.cm-ext-checkbox-toggle.cm-taskMarker';
 
 const measurementsChanged = StateEffect.define<void>();
 
@@ -484,6 +485,37 @@ export const wrappedLineIndentExtension = ViewPlugin.fromClass(WrappedLineIndent
     decorations: (plugin) => plugin.decorations,
 });
 
+export const legacyTaskListCheckboxTheme = EditorView.theme({
+    [`& ${LEGACY_TASK_MARKER_SELECTOR}`]: {
+        alignItems: 'center',
+        display: 'inline-flex',
+        position: 'static',
+        verticalAlign: 'middle',
+
+        '& > .sizing': {
+            display: 'none',
+        },
+
+        '& > .content': {
+            bottom: 'auto',
+            display: 'inline-flex',
+            left: 'auto',
+            position: 'static',
+            right: 'auto',
+            textAlign: 'initial',
+            top: 'auto',
+        },
+
+        '& > .content > input.cm-ext-checkbox': {
+            height: '1.1em',
+            margin: '4px',
+            minHeight: '0',
+            verticalAlign: 'middle',
+            width: '1.1em',
+        },
+    },
+});
+
 export default () => {
     return {
         plugin: (codeMirrorWrapper: CodeMirrorWrapper) => {
@@ -491,7 +523,7 @@ export default () => {
                 return;
             }
 
-            codeMirrorWrapper.addExtension(wrappedLineIndentExtension);
+            codeMirrorWrapper.addExtension([legacyTaskListCheckboxTheme, wrappedLineIndentExtension]);
         },
     };
 };
