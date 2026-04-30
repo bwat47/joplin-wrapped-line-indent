@@ -21,6 +21,7 @@ import type { SyntaxNode } from '@lezer/common';
 
 const MAX_MEASUREMENT_RETRIES = 20;
 const WRAPPED_LINE_CLASS = 'cm-wrapped-line-indent';
+const LIST_PREFIX_PATTERN = /^([ \t]*(?:[-*+]|\d+[.)])[ \t]+(?:\[[ xX]\][ \t]+)?)/;
 const TASK_LIST_CHECKBOX_SUFFIX = /\[[ xX]\][ \t]+$/;
 const LEGACY_TASK_MARKER_SELECTOR = '.cm-ext-checkbox-toggle.cm-taskMarker';
 
@@ -33,14 +34,26 @@ interface CodeMirrorWrapper {
 
 interface MeasurementTarget {
     from: number;
+    prefix: string;
     to: number;
+}
+
+interface PrefixMeasurement {
+    prefix: string;
+    width: number;
 }
 
 interface MeasureReadResult {
     linePaddingLeft: number;
     isStale: boolean;
     needsRetry: boolean;
-    widths: Map<string, number>;
+    widths: Map<string, PrefixMeasurement>;
+}
+
+enum LinePaddingMeasurementState {
+    Unknown = 'unknown',
+    Stale = 'stale',
+    Measured = 'measured',
 }
 
 class TabWidget extends WidgetType {
@@ -70,6 +83,10 @@ export function getTabReplacementWidth(textBeforeTab: string, tabSize: number, c
     return (tabSize - (column % tabSize)) * characterWidth;
 }
 
+function getListPrefix(lineText: string): string | null {
+    return LIST_PREFIX_PATTERN.exec(lineText)?.[1] ?? null;
+}
+
 /**
  * Prefix patterns:
  * - `   text`
@@ -80,19 +97,17 @@ export function getTabReplacementWidth(textBeforeTab: string, tabSize: number, c
 export function getIndentPrefix(lineText: string): string | null {
     const blockquoteMatch = /^([ \t]*(?:>[ \t]*)+)/.exec(lineText);
     if (blockquoteMatch?.[1]) {
-        const listMatch = /^([ \t]*(?:[-*+]|\d+[.)])[ \t]+(?:\[[ xX]\][ \t]+)?)/.exec(
-            lineText.slice(blockquoteMatch[1].length)
-        );
-        if (listMatch?.[1]) {
-            return blockquoteMatch[1] + listMatch[1];
+        const listPrefix = getListPrefix(lineText.slice(blockquoteMatch[1].length));
+        if (listPrefix) {
+            return blockquoteMatch[1] + listPrefix;
         }
 
         return blockquoteMatch[1];
     }
 
-    const listMatch = /^([ \t]*(?:[-*+]|\d+[.)])[ \t]+(?:\[[ xX]\][ \t]+)?)/.exec(lineText);
-    if (listMatch?.[1]) {
-        return listMatch[1];
+    const listPrefix = getListPrefix(lineText);
+    if (listPrefix) {
+        return listPrefix;
     }
 
     const whitespaceMatch = /^([ \t]+)/.exec(lineText);
@@ -238,6 +253,8 @@ class WrappedLineIndentPlugin implements PluginValue {
 
     private readonly cachedPrefixWidths = new Map<string, number>();
 
+    private readonly rawPrefixWidths = new Map<string, number>();
+
     private readonly pendingMeasurements = new Map<string, MeasurementTarget>();
 
     private measureScheduled = false;
@@ -250,9 +267,7 @@ class WrappedLineIndentPlugin implements PluginValue {
 
     private linePaddingLeft = 0;
 
-    private linePaddingMeasurementNeeded = true;
-
-    private linePaddingMeasured = false;
+    private linePaddingMeasurementState = LinePaddingMeasurementState.Unknown;
 
     public constructor(private readonly view: EditorView) {
         this.measurementSignature = getMeasurementSignature(view);
@@ -263,25 +278,24 @@ class WrappedLineIndentPlugin implements PluginValue {
     public update(update: ViewUpdate): void {
         const nextMeasurementSignature = getMeasurementSignature(this.view);
         const measurementsNeedRefresh = nextMeasurementSignature !== this.measurementSignature;
+        const measurementsChangedEffect = update.transactions.some((transaction) =>
+            transaction.effects.some((effect) => effect.is(measurementsChanged))
+        );
+        const documentOrSelectionChanged = update.docChanged || update.selectionSet;
+        const editorViewChanged = update.viewportChanged || update.geometryChanged || update.focusChanged;
+        const shouldRebuildDecorations =
+            measurementsNeedRefresh || documentOrSelectionChanged || editorViewChanged || measurementsChangedEffect;
+
         if (measurementsNeedRefresh) {
             this.measurementSignature = nextMeasurementSignature;
             this.cachedPrefixWidths.clear();
-            this.linePaddingMeasurementNeeded = true;
+            this.rawPrefixWidths.clear();
+            this.requestLinePaddingMeasurement();
         }
 
-        if (
-            measurementsNeedRefresh ||
-            update.docChanged ||
-            update.selectionSet ||
-            update.focusChanged ||
-            update.viewportChanged ||
-            update.geometryChanged ||
-            update.transactions.some((transaction) =>
-                transaction.effects.some((effect) => effect.is(measurementsChanged))
-            )
-        ) {
+        if (shouldRebuildDecorations) {
             if (update.geometryChanged) {
-                this.linePaddingMeasurementNeeded = true;
+                this.requestLinePaddingMeasurement();
             }
 
             this.decorations = this.buildDecorations();
@@ -300,6 +314,7 @@ class WrappedLineIndentPlugin implements PluginValue {
 
         this.pendingMeasurements.clear();
         this.cachedPrefixWidths.clear();
+        this.rawPrefixWidths.clear();
     }
 
     private buildDecorations(): DecorationSet {
@@ -343,11 +358,11 @@ class WrappedLineIndentPlugin implements PluginValue {
         const cacheKey = getPrefixCacheKey(prefix, line, this.view.state);
         const cachedWidth = this.cachedPrefixWidths.get(cacheKey);
         if (cachedWidth === undefined) {
-            this.pendingMeasurements.set(cacheKey, { from: line.from, to: prefixTo });
+            this.pendingMeasurements.set(cacheKey, { from: line.from, prefix, to: prefixTo });
         }
 
-        let decorationWidth = cachedWidth ?? this.getCachedWidthForPrefix(prefix);
-        if (decorationWidth === undefined && (!this.linePaddingMeasurementNeeded || this.linePaddingMeasured)) {
+        let decorationWidth = cachedWidth ?? this.rawPrefixWidths.get(prefix);
+        if (decorationWidth === undefined && this.canEstimatePrefixWidth()) {
             decorationWidth = estimatePrefixWidth(prefix, this.view);
         }
 
@@ -358,15 +373,19 @@ class WrappedLineIndentPlugin implements PluginValue {
         addTabReplacementDecorations(builder, line, prefix, this.view);
     }
 
-    private getCachedWidthForPrefix(prefix: string): number | undefined {
-        const keySuffix = `:${prefix}`;
-        for (const [cacheKey, width] of this.cachedPrefixWidths) {
-            if (cacheKey === prefix || cacheKey.endsWith(keySuffix)) {
-                return width;
-            }
-        }
+    private canEstimatePrefixWidth(): boolean {
+        return this.linePaddingMeasurementState !== LinePaddingMeasurementState.Unknown;
+    }
 
-        return undefined;
+    private isLinePaddingMeasurementNeeded(): boolean {
+        return this.linePaddingMeasurementState !== LinePaddingMeasurementState.Measured;
+    }
+
+    private requestLinePaddingMeasurement(): void {
+        this.linePaddingMeasurementState =
+            this.linePaddingMeasurementState === LinePaddingMeasurementState.Unknown
+                ? LinePaddingMeasurementState.Unknown
+                : LinePaddingMeasurementState.Stale;
     }
 
     private scheduleMeasure(): void {
@@ -374,7 +393,7 @@ class WrappedLineIndentPlugin implements PluginValue {
             return;
         }
 
-        if (this.measureScheduled || (this.pendingMeasurements.size === 0 && !this.linePaddingMeasurementNeeded)) {
+        if (this.measureScheduled || (this.pendingMeasurements.size === 0 && !this.isLinePaddingMeasurementNeeded())) {
             return;
         }
 
@@ -400,7 +419,7 @@ class WrappedLineIndentPlugin implements PluginValue {
 
                 if (result.isStale) {
                     this.measurementRetries = 0;
-                    this.linePaddingMeasurementNeeded = true;
+                    this.requestLinePaddingMeasurement();
                     this.scheduleMeasure();
                     return;
                 }
@@ -411,12 +430,16 @@ class WrappedLineIndentPlugin implements PluginValue {
                     changed = true;
                 }
 
-                this.linePaddingMeasurementNeeded = false;
-                this.linePaddingMeasured = true;
+                this.linePaddingMeasurementState = LinePaddingMeasurementState.Measured;
 
-                for (const [prefix, width] of result.widths) {
-                    if (this.cachedPrefixWidths.get(prefix) !== width) {
-                        this.cachedPrefixWidths.set(prefix, width);
+                for (const [cacheKey, measurement] of result.widths) {
+                    if (this.cachedPrefixWidths.get(cacheKey) !== measurement.width) {
+                        this.cachedPrefixWidths.set(cacheKey, measurement.width);
+                        changed = true;
+                    }
+
+                    if (this.rawPrefixWidths.get(measurement.prefix) !== measurement.width) {
+                        this.rawPrefixWidths.set(measurement.prefix, measurement.width);
                         changed = true;
                     }
                 }
@@ -462,7 +485,7 @@ class WrappedLineIndentPlugin implements PluginValue {
             linePaddingLeft: this.linePaddingLeft,
             isStale: false,
             needsRetry: false,
-            widths: new Map<string, number>(),
+            widths: new Map<string, PrefixMeasurement>(),
         };
     }
 
@@ -473,7 +496,7 @@ class WrappedLineIndentPlugin implements PluginValue {
         measuredSelection: EditorSelection,
         fallbackPaddingLeft: number
     ): MeasureReadResult {
-        const measuredWidths = new Map<string, number>();
+        const measuredWidths = new Map<string, PrefixMeasurement>();
         const linePaddingLeft = getLinePaddingLeft(view, fallbackPaddingLeft);
         if (view.state.doc !== measuredDoc || view.state.selection !== measuredSelection) {
             return { linePaddingLeft, isStale: true, needsRetry: false, widths: measuredWidths };
@@ -495,7 +518,7 @@ class WrappedLineIndentPlugin implements PluginValue {
                 continue;
             }
 
-            measuredWidths.set(cacheKey, width);
+            measuredWidths.set(cacheKey, { prefix: target.prefix, width });
         }
 
         return { linePaddingLeft, isStale: false, needsRetry, widths: measuredWidths };
