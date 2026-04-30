@@ -162,6 +162,20 @@ function addTabReplacementDecorations(
     }
 }
 
+function estimatePrefixWidth(prefix: string, view: EditorView): number {
+    const characterWidth = view.defaultCharacterWidth / view.scaleX;
+    let width = 0;
+
+    for (let index = 0; index < prefix.length; index++) {
+        width +=
+            prefix[index] === '\t'
+                ? getTabReplacementWidth(prefix.slice(0, index), view.state.tabSize, characterWidth)
+                : characterWidth;
+    }
+
+    return width;
+}
+
 export function getLineDecorationStyle(width: number, linePaddingLeft: number): string {
     const paddingLeft = width + linePaddingLeft;
 
@@ -237,6 +251,8 @@ class WrappedLineIndentPlugin implements PluginValue {
     private linePaddingLeft = 0;
 
     private linePaddingMeasurementNeeded = true;
+
+    private linePaddingMeasured = false;
 
     public constructor(private readonly view: EditorView) {
         this.measurementSignature = getMeasurementSignature(view);
@@ -330,7 +346,11 @@ class WrappedLineIndentPlugin implements PluginValue {
             this.pendingMeasurements.set(cacheKey, { from: line.from, to: prefixTo });
         }
 
-        const decorationWidth = cachedWidth ?? this.getCachedWidthForPrefix(prefix);
+        let decorationWidth = cachedWidth ?? this.getCachedWidthForPrefix(prefix);
+        if (decorationWidth === undefined && (!this.linePaddingMeasurementNeeded || this.linePaddingMeasured)) {
+            decorationWidth = estimatePrefixWidth(prefix, this.view);
+        }
+
         if (decorationWidth !== undefined && decorationWidth > 0) {
             builder.add(line.from, line.from, createLineDecoration(decorationWidth, this.linePaddingLeft));
         }
@@ -392,6 +412,7 @@ class WrappedLineIndentPlugin implements PluginValue {
                 }
 
                 this.linePaddingMeasurementNeeded = false;
+                this.linePaddingMeasured = true;
 
                 for (const [prefix, width] of result.widths) {
                     if (this.cachedPrefixWidths.get(prefix) !== width) {
