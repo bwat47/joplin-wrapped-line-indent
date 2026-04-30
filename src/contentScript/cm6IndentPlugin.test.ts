@@ -4,11 +4,13 @@ import type { Extension } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 
 import {
+    default as createContentScript,
     getIndentPrefix,
     getLineDecorationStyle,
     getTabReplacementWidth,
     isBlockCodeNode,
     isHorizontalRuleNode,
+    legacyTaskListCheckboxTheme,
     wrappedLineIndentExtension,
 } from './cm6IndentPlugin';
 
@@ -55,6 +57,21 @@ describe('wrappedLineIndentExtension', () => {
 
         return view;
     };
+
+    it('registers the legacy task-list checkbox theme with the plugin', () => {
+        const extensionGroups: unknown[] = [];
+        createContentScript().plugin({
+            cm6: {} as EditorView,
+            addExtension: (extension) => {
+                extensionGroups.push(extension);
+            },
+        });
+
+        expect(extensionGroups).toHaveLength(1);
+        expect(extensionGroups[0]).toEqual(
+            expect.arrayContaining([legacyTaskListCheckboxTheme, wrappedLineIndentExtension])
+        );
+    });
 
     beforeEach(() => {
         frameCallbacks = new Map();
