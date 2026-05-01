@@ -130,8 +130,11 @@ describe('wrappedLineIndentExtension', () => {
 
         const plugin = view.plugin(wrappedLineIndentExtension);
         (
-            plugin as unknown as { linePaddingMeasurementNeeded: boolean; scheduleMeasure(): void }
-        ).linePaddingMeasurementNeeded = true;
+            plugin as unknown as {
+                linePadding: { status: 'unknown' | 'stale' | 'measured'; value: number };
+                scheduleMeasure(): void;
+            }
+        ).linePadding = { status: 'stale', value: 10 };
         (plugin as unknown as { scheduleMeasure(): void }).scheduleMeasure();
         flushMeasureCycle(view);
 
