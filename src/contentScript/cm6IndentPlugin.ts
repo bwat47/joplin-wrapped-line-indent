@@ -219,6 +219,18 @@ function hasSelectionInRange(state: EditorState, from: number, to: number): bool
     return state.selection.ranges.some((range) => range.from <= to && range.to >= from);
 }
 
+function getTaskListCheckboxRange(prefix: string, line: Line): MeasurementTarget | null {
+    const checkboxIndex = prefix.search(/\[[ xX]\]/);
+    if (checkboxIndex < 0) {
+        return null;
+    }
+
+    return {
+        from: line.from + checkboxIndex,
+        to: line.from + checkboxIndex + '[ ]'.length,
+    };
+}
+
 function getPrefixCacheKey(prefix: string, line: Line, state: EditorState): string {
     if (!isMarkupVisibilitySensitivePrefix(prefix)) {
         return prefix;
@@ -230,8 +242,10 @@ function getPrefixCacheKey(prefix: string, line: Line, state: EditorState): stri
     }
 
     if (TASK_LIST_CHECKBOX_SUFFIX.test(prefix)) {
-        const prefixTo = line.from + prefix.length;
-        states.push(`task:${hasSelectionInRange(state, line.from, prefixTo) ? 'selected' : 'unselected'}`);
+        const checkboxRange = getTaskListCheckboxRange(prefix, line);
+        const checkboxVisibilityState =
+            checkboxRange && hasSelectionInRange(state, checkboxRange.from, checkboxRange.to) ? 'revealed' : 'rendered';
+        states.push(`task:${checkboxVisibilityState}`);
     }
 
     return `${states.join(':')}:${prefix}`;
