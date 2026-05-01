@@ -278,6 +278,48 @@ describe('wrappedLineIndentExtension', () => {
         view.destroy();
     });
 
+    it('remeasures rendered task checkbox width after toggling while raw markup was visible', () => {
+        const view = createView('  - [ ] first task');
+        coordsAtPosSpy.mockImplementation((position) => {
+            const line = view.state.doc.lineAt(position);
+            const checkboxFrom = line.from + '  - '.length;
+            const checkboxTo = checkboxFrom + '[ ]'.length;
+            const prefixTo = line.from + '  - [ ] '.length;
+            const cursor = view.state.selection.main.head;
+            const revealsCheckboxMarkup = cursor >= checkboxFrom && cursor <= checkboxTo;
+            const prefixWidth = revealsCheckboxMarkup ? 56 : 32;
+            const left = position <= line.from + 1 ? 0 : position <= prefixTo ? prefixWidth : prefixWidth + 8;
+            return { left, right: left, top: 0, bottom: 16 };
+        });
+
+        flushMeasureCycle(view);
+        flushMeasureCycle(view);
+        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('42px');
+
+        view.dispatch({ selection: { anchor: view.state.doc.line(1).from + '  - ['.length } });
+
+        view.dispatch({
+            changes: {
+                from: view.state.doc.line(1).from + '  - ['.length,
+                to: view.state.doc.line(1).from + '  - [ ]'.length,
+                insert: 'x]',
+            },
+        });
+        flushMeasureCycle(view);
+        flushMeasureCycle(view);
+        flushMeasureCycle(view);
+        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('66px');
+
+        view.dispatch({ selection: { anchor: view.state.doc.line(1).from + '  - [x] '.length } });
+        flushMeasureCycle(view);
+        flushMeasureCycle(view);
+        flushMeasureCycle(view);
+
+        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('42px');
+
+        view.destroy();
+    });
+
     it('does not remeasure unchanged block quote list lines after same-line edits', () => {
         const view = createView('> - first quoted item\n> - second quoted item');
         flushMeasureCycle(view);
