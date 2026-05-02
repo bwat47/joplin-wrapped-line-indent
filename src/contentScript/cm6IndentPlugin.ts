@@ -19,7 +19,6 @@ import {
 } from '@codemirror/view';
 import type { SyntaxNode } from '@lezer/common';
 
-const MAX_MEASUREMENT_RETRIES = 20;
 const WRAPPED_LINE_CLASS = 'cm-wrapped-line-indent';
 const TASK_LIST_CHECKBOX_SUFFIX = /\[[ xX]\][ \t]+$/;
 const LEGACY_TASK_MARKER_SELECTOR = '.cm-ext-checkbox-toggle.cm-taskMarker';
@@ -268,7 +267,7 @@ class WrappedLineIndentPlugin implements PluginValue {
 
     private measurementSignature: string;
 
-    private measurementRetries = 0;
+    private incompleteMeasurementRefreshSpent = false;
 
     private refreshFrame: number | null = null;
 
@@ -294,11 +293,13 @@ class WrappedLineIndentPlugin implements PluginValue {
         );
         const editorContentOrStateChanged = update.docChanged || update.selectionSet || update.focusChanged;
         const viewportOrGeometryChanged = update.viewportChanged || update.geometryChanged;
-        const shouldRebuildDecorations =
-            measurementsNeedRefresh ||
-            editorContentOrStateChanged ||
-            viewportOrGeometryChanged ||
-            receivedMeasurementUpdate;
+        const externalRefreshTrigger =
+            measurementsNeedRefresh || editorContentOrStateChanged || viewportOrGeometryChanged;
+        const shouldRebuildDecorations = externalRefreshTrigger || receivedMeasurementUpdate;
+
+        if (externalRefreshTrigger) {
+            this.incompleteMeasurementRefreshSpent = false;
+        }
 
         if (shouldRebuildDecorations) {
             if (update.geometryChanged) {
@@ -420,7 +421,6 @@ class WrappedLineIndentPlugin implements PluginValue {
                 this.measureScheduled = false;
 
                 if (result.isStale) {
-                    this.measurementRetries = 0;
                     this.markLinePaddingStale();
                     this.scheduleMeasure();
                     return;
@@ -439,19 +439,15 @@ class WrappedLineIndentPlugin implements PluginValue {
                     }
                 }
 
-                if (changed) {
-                    this.measurementRetries = 0;
+                const shouldRefreshForIncompleteMeasurement =
+                    result.needsRetry && !this.incompleteMeasurementRefreshSpent;
+                if (shouldRefreshForIncompleteMeasurement) {
+                    this.incompleteMeasurementRefreshSpent = true;
+                }
+
+                if (changed || shouldRefreshForIncompleteMeasurement) {
                     this.scheduleDecorationsRefresh();
-                    return;
                 }
-
-                if (result.needsRetry && this.measurementRetries < MAX_MEASUREMENT_RETRIES) {
-                    this.measurementRetries++;
-                    this.scheduleMeasure();
-                    return;
-                }
-
-                this.measurementRetries = 0;
             },
         });
     }
