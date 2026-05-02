@@ -348,6 +348,51 @@ describe('wrappedLineIndentExtension', () => {
         view.destroy();
     });
 
+    it('measures another visible line when one occurrence of the same prefix is temporarily unavailable', () => {
+        const view = createView('  - first item\n  - second item');
+        const secondLine = view.state.doc.line(2);
+
+        coordsAtPosSpy.mockImplementation((position) => {
+            if (position >= secondLine.from && position <= secondLine.to) {
+                return null;
+            }
+
+            const line = view.state.doc.lineAt(position);
+            const left = position <= line.from + 1 ? 0 : 40;
+            return { left, right: left, top: 0, bottom: 16 };
+        });
+
+        flushMeasureCycle(view);
+        flushMeasureCycle(view);
+
+        expect(
+            [...view.dom.querySelectorAll<HTMLElement>('.cm-wrapped-line-indent')].map((line) => line.style.paddingLeft)
+        ).toEqual(['50px', '50px']);
+
+        view.destroy();
+    });
+
+    it('uses the smallest valid measurement when equivalent rendered task prefixes disagree', () => {
+        const view = createView('  - [ ] first task\n  - [ ] second task');
+        const firstLine = view.state.doc.line(1);
+
+        coordsAtPosSpy.mockImplementation((position) => {
+            const line = view.state.doc.lineAt(position);
+            const prefixWidth = line.from === firstLine.from ? 56 : 32;
+            const left = position <= line.from + 1 ? 0 : prefixWidth;
+            return { left, right: left, top: 0, bottom: 16 };
+        });
+
+        flushMeasureCycle(view);
+        flushMeasureCycle(view);
+
+        expect(
+            [...view.dom.querySelectorAll<HTMLElement>('.cm-wrapped-line-indent')].map((line) => line.style.paddingLeft)
+        ).toEqual(['42px', '42px']);
+
+        view.destroy();
+    });
+
     it('remeasures cached tab prefix widths when tab size changes', () => {
         const tabSize = new Compartment();
         const view = createView('\tindented paragraph', [tabSize.of(EditorState.tabSize.of(4))]);
