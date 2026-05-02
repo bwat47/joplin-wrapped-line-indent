@@ -1,5 +1,5 @@
 import { markdown } from '@codemirror/lang-markdown';
-import { EditorState } from '@codemirror/state';
+import { Compartment, EditorState } from '@codemirror/state';
 import type { Extension } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 
@@ -344,6 +344,25 @@ describe('wrappedLineIndentExtension', () => {
         });
 
         expect(view.dom.querySelectorAll<HTMLElement>('.cm-wrapped-line-indent')).toHaveLength(1);
+
+        view.destroy();
+    });
+
+    it('remeasures cached tab prefix widths when tab size changes', () => {
+        const tabSize = new Compartment();
+        const view = createView('\tindented paragraph', [tabSize.of(EditorState.tabSize.of(4))]);
+        coordsAtPosSpy.mockImplementation((position) => {
+            const left = position === view.state.doc.line(1).from ? 0 : view.state.tabSize * 8;
+            return { left, right: left, top: 0, bottom: 16 };
+        });
+
+        flushMeasureCycle(view);
+        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('42px');
+
+        view.dispatch({ effects: tabSize.reconfigure(EditorState.tabSize.of(8)) });
+        flushMeasureCycle(view);
+
+        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('74px');
 
         view.destroy();
     });

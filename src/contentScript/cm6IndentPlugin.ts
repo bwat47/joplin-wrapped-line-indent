@@ -300,7 +300,7 @@ function getPrefixCacheKey(prefix: ParsedIndentPrefix, line: Line, state: Editor
 }
 
 function getMeasurementSignature(view: EditorView): string {
-    return [view.defaultCharacterWidth, view.defaultLineHeight, view.scaleX, view.scaleY].join(':');
+    return [view.defaultCharacterWidth, view.defaultLineHeight, view.scaleX, view.scaleY, view.state.tabSize].join(':');
 }
 
 class WrappedLineIndentPlugin implements PluginValue {
