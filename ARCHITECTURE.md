@@ -13,7 +13,7 @@ This ensures the first line remains at the gutter margin while wrapped lines ali
 
 ### 2. State and Decoration Lifecycle
 
-- **`buildDecorations`**: Scans `view.visibleRanges` and identifies line prefixes using `getIndentPrefix`.
+- **`buildDecorations`**: Scans `view.visibleRanges` and identifies line prefixes using `parseIndentPrefix`, which returns `ParsedIndentPrefix` metadata describing the raw prefix text, quote depth, task checkbox offset, and whether the prefix width depends on markup visibility.
 - **Exclusion Logic**: Lines within `CodeBlock`, `FencedCode`, `CodeInfo`, or `HorizontalRule` nodes are ignored via `isInIndentExcludedSyntax`.
 - **Tab Replacement**: Tab characters in the prefix are replaced by a `TabWidget`. This transforms an abstract tab into a measurable DOM element with a fixed `inline-style` width.
 
@@ -23,7 +23,7 @@ To prevent layout thrashing, the plugin utilizes the `view.requestMeasure` API, 
 
 - **Read Phase (`measurePrefixes`)**: Uses `view.coordsAtPos` to retrieve the viewport coordinates for the start (`from`) and end (`to`) of the prefix. The width is derived from `endCoords.left - startCoords.left`.
 - **Write Phase**: Updates `cachedPrefixWidths` and dispatches a `StateEffect` (`measurementsChanged`) to trigger a re-render with the new dimensions.
-- **Retry Logic**: Includes a `MAX_MEASUREMENT_RETRIES` (20) to handle instances where the DOM is not yet ready to report accurate coordinates.
+- **Retry Logic**: Allows one deferred follow-up refresh when prefix coordinates are temporarily unavailable, then waits for the next external update rather than continuously dispatching refreshes.
 
 ### 4. Tab vs. Space Handling
 
@@ -36,7 +36,7 @@ The plugin treats tabs and spaces as physical layout objects:
 ### 5. Caching and Invalidation
 
 - **`cachedPrefixWidths`**: A Map that stores widths to avoid redundant DOM lookups.
-- **Cache Keys**: Derived via `getPrefixCacheKey`. For elements like blockquotes (`>`) or checkboxes (`[ ]`), the key includes selection state to account for Joplin’s "markup visibility" (where markers may hide/show based on cursor proximity).
+- **Cache Keys**: Derived via `getPrefixCacheKey` from the parsed prefix metadata. For elements like blockquotes (`>`) or checkboxes (`[ ]`), the key includes selection state to account for Joplin’s "markup visibility" (where markers may hide/show based on cursor proximity).
 - **`measurementSignature`**: Tracks `defaultCharacterWidth`, `defaultLineHeight`, and `scaleX/Y`. If these change (e.g., zoom or font swap), the cache is purged and re-measurement is scheduled.
 
 ### 6. Reactivity

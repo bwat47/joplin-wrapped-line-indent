@@ -20,7 +20,7 @@ import {
 import type { SyntaxNode } from '@lezer/common';
 
 const WRAPPED_LINE_CLASS = 'cm-wrapped-line-indent';
-const TASK_LIST_CHECKBOX_SUFFIX = /\[[ xX]\][ \t]+$/;
+const TASK_LIST_CHECKBOX_PATTERN = /\[[ xX]\]/;
 const LEGACY_TASK_MARKER_SELECTOR = '.cm-ext-checkbox-toggle.cm-taskMarker';
 const LIST_PREFIX_PATTERN = /^([ \t]*(?:[-*+]|\d+[.)])[ \t]+(?:\[[ xX]\][ \t]+)?)/;
 
@@ -41,6 +41,16 @@ interface MeasureReadResult {
     isStale: boolean;
     needsRetry: boolean;
     widths: Map<string, number>;
+}
+
+export type IndentPrefixKind = 'indent' | 'list' | 'quote' | 'quote-list';
+
+export interface ParsedIndentPrefix {
+    kind: IndentPrefixKind;
+    text: string;
+    quoteDepth: number;
+    checkboxOffset: number | null;
+    visibilitySensitive: boolean;
 }
 
 type LinePaddingMeasurementStatus = 'unknown' | 'stale' | 'measured';
@@ -77,8 +87,26 @@ export function getTabReplacementWidth(textBeforeTab: string, tabSize: number, c
     return (tabSize - (column % tabSize)) * characterWidth;
 }
 
-function getListPrefix(lineText: string): string | null {
-    return LIST_PREFIX_PATTERN.exec(lineText)?.[1] ?? null;
+interface ParsedListPrefix {
+    text: string;
+    checkboxOffset: number | null;
+}
+
+function parseListPrefix(lineText: string): ParsedListPrefix | null {
+    const text = LIST_PREFIX_PATTERN.exec(lineText)?.[1];
+    if (!text) {
+        return null;
+    }
+
+    const checkboxIndex = text.search(TASK_LIST_CHECKBOX_PATTERN);
+    return {
+        text,
+        checkboxOffset: checkboxIndex >= 0 ? checkboxIndex : null,
+    };
+}
+
+function getQuoteDepth(prefixText: string): number {
+    return [...prefixText].filter((character) => character === '>').length;
 }
 
 /**
@@ -88,25 +116,51 @@ function getListPrefix(lineText: string): string | null {
  * - `> quote`, `> > nested quote`, including indentation before `>`
  * - `> - item`, `> > 1. nested item`, including the list marker after the quote prefix
  */
-export function getIndentPrefix(lineText: string): string | null {
+export function parseIndentPrefix(lineText: string): ParsedIndentPrefix | null {
     const blockquoteMatch = /^([ \t]*(?:>[ \t]*)+)/.exec(lineText);
     if (blockquoteMatch?.[1]) {
-        const listPrefix = getListPrefix(lineText.slice(blockquoteMatch[1].length));
+        const quotePrefix = blockquoteMatch[1];
+        const listPrefix = parseListPrefix(lineText.slice(quotePrefix.length));
         if (listPrefix) {
-            return blockquoteMatch[1] + listPrefix;
+            return {
+                kind: 'quote-list',
+                text: quotePrefix + listPrefix.text,
+                quoteDepth: getQuoteDepth(quotePrefix),
+                checkboxOffset:
+                    listPrefix.checkboxOffset === null ? null : quotePrefix.length + listPrefix.checkboxOffset,
+                visibilitySensitive: true,
+            };
         }
 
-        return blockquoteMatch[1];
+        return {
+            kind: 'quote',
+            text: quotePrefix,
+            quoteDepth: getQuoteDepth(quotePrefix),
+            checkboxOffset: null,
+            visibilitySensitive: true,
+        };
     }
 
-    const listPrefix = getListPrefix(lineText);
+    const listPrefix = parseListPrefix(lineText);
     if (listPrefix) {
-        return listPrefix;
+        return {
+            kind: 'list',
+            text: listPrefix.text,
+            quoteDepth: 0,
+            checkboxOffset: listPrefix.checkboxOffset,
+            visibilitySensitive: listPrefix.checkboxOffset !== null,
+        };
     }
 
     const whitespaceMatch = /^([ \t]+)/.exec(lineText);
     if (whitespaceMatch?.[1]) {
-        return whitespaceMatch[1];
+        return {
+            kind: 'indent',
+            text: whitespaceMatch[1],
+            quoteDepth: 0,
+            checkboxOffset: null,
+            visibilitySensitive: false,
+        };
     }
 
     return null;
@@ -210,44 +264,39 @@ function createLineDecoration(width: number, linePaddingLeft: number): Decoratio
     });
 }
 
-function isMarkupVisibilitySensitivePrefix(prefix: string): boolean {
-    return prefix.includes('>') || TASK_LIST_CHECKBOX_SUFFIX.test(prefix);
-}
-
 function hasSelectionInRange(state: EditorState, from: number, to: number): boolean {
     return state.selection.ranges.some((range) => range.from <= to && range.to >= from);
 }
 
-function getTaskListCheckboxRange(prefix: string, line: Line): MeasurementTarget | null {
-    const checkboxIndex = prefix.search(/\[[ xX]\]/);
-    if (checkboxIndex < 0) {
+function getTaskListCheckboxRange(prefix: ParsedIndentPrefix, line: Line): MeasurementTarget | null {
+    if (prefix.checkboxOffset === null) {
         return null;
     }
 
     return {
-        from: line.from + checkboxIndex,
-        to: line.from + checkboxIndex + '[ ]'.length,
+        from: line.from + prefix.checkboxOffset,
+        to: line.from + prefix.checkboxOffset + '[ ]'.length,
     };
 }
 
-function getPrefixCacheKey(prefix: string, line: Line, state: EditorState): string {
-    if (!isMarkupVisibilitySensitivePrefix(prefix)) {
-        return prefix;
+function getPrefixCacheKey(prefix: ParsedIndentPrefix, line: Line, state: EditorState): string {
+    if (!prefix.visibilitySensitive) {
+        return prefix.text;
     }
 
     const states: string[] = [];
-    if (prefix.includes('>')) {
+    if (prefix.quoteDepth > 0) {
         states.push(`quote:${hasSelectionInRange(state, line.from, line.to) ? 'selected' : 'unselected'}`);
     }
 
-    if (TASK_LIST_CHECKBOX_SUFFIX.test(prefix)) {
+    if (prefix.checkboxOffset !== null) {
         const checkboxRange = getTaskListCheckboxRange(prefix, line);
         const checkboxVisibilityState =
             checkboxRange && hasSelectionInRange(state, checkboxRange.from, checkboxRange.to) ? 'revealed' : 'rendered';
         states.push(`task:${checkboxVisibilityState}`);
     }
 
-    return `${states.join(':')}:${prefix}`;
+    return `${states.join(':')}:${prefix.text}`;
 }
 
 function getMeasurementSignature(view: EditorView): string {
@@ -349,12 +398,12 @@ class WrappedLineIndentPlugin implements PluginValue {
     }
 
     private addDecorationsForLine(builder: RangeSetBuilder<Decoration>, line: Line): void {
-        const prefix = getIndentPrefix(line.text);
+        const prefix = parseIndentPrefix(line.text);
         if (!prefix) {
             return;
         }
 
-        const prefixTo = line.from + prefix.length;
+        const prefixTo = line.from + prefix.text.length;
         if (
             intersectsFoldedRange(this.view.state, line.from, prefixTo) ||
             isInIndentExcludedSyntax(this.view.state, line.from, prefixTo)
@@ -368,16 +417,16 @@ class WrappedLineIndentPlugin implements PluginValue {
             this.pendingMeasurements.set(cacheKey, { from: line.from, to: prefixTo });
         }
 
-        let decorationWidth = cachedWidth ?? this.getCachedWidthForPrefix(prefix);
+        let decorationWidth = cachedWidth ?? this.getCachedWidthForPrefix(prefix.text);
         if (decorationWidth === undefined && this.canUseEstimatedPrefixWidth()) {
-            decorationWidth = estimatePrefixWidth(prefix, this.view);
+            decorationWidth = estimatePrefixWidth(prefix.text, this.view);
         }
 
         if (decorationWidth !== undefined && decorationWidth > 0) {
             builder.add(line.from, line.from, createLineDecoration(decorationWidth, this.linePadding.value));
         }
 
-        addTabReplacementDecorations(builder, line, prefix, this.view);
+        addTabReplacementDecorations(builder, line, prefix.text, this.view);
     }
 
     private getCachedWidthForPrefix(prefix: string): number | undefined {

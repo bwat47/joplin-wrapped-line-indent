@@ -5,8 +5,8 @@ import { EditorView } from '@codemirror/view';
 
 import {
     default as createContentScript,
-    getIndentPrefix,
     getLineDecorationStyle,
+    parseIndentPrefix,
     getTabReplacementWidth,
     isBlockCodeNode,
     isHorizontalRuleNode,
@@ -443,16 +443,64 @@ describe('wrappedLineIndentExtension', () => {
     });
 });
 
-describe('getIndentPrefix', () => {
-    it('includes list markers inside block quotes', () => {
-        expect(getIndentPrefix('> - quoted item')).toBe('> - ');
-        expect(getIndentPrefix('> > 12. nested quoted item')).toBe('> > 12. ');
-        expect(getIndentPrefix('> * [x] quoted task')).toBe('> * [x] ');
+describe('parseIndentPrefix', () => {
+    it('captures quoted list metadata', () => {
+        expect(parseIndentPrefix('> - quoted item')).toEqual({
+            kind: 'quote-list',
+            text: '> - ',
+            quoteDepth: 1,
+            checkboxOffset: null,
+            visibilitySensitive: true,
+        });
+        expect(parseIndentPrefix('> > 12. nested quoted item')).toEqual({
+            kind: 'quote-list',
+            text: '> > 12. ',
+            quoteDepth: 2,
+            checkboxOffset: null,
+            visibilitySensitive: true,
+        });
+        expect(parseIndentPrefix('> * [x] quoted task')).toEqual({
+            kind: 'quote-list',
+            text: '> * [x] ',
+            quoteDepth: 1,
+            checkboxOffset: 4,
+            visibilitySensitive: true,
+        });
     });
 
-    it('keeps quote-only prefixes for regular block quote lines', () => {
-        expect(getIndentPrefix('> quoted text')).toBe('> ');
-        expect(getIndentPrefix('> > nested quoted text')).toBe('> > ');
+    it('captures quote-only, list, and indentation metadata', () => {
+        expect(parseIndentPrefix('> quoted text')).toEqual({
+            kind: 'quote',
+            text: '> ',
+            quoteDepth: 1,
+            checkboxOffset: null,
+            visibilitySensitive: true,
+        });
+        expect(parseIndentPrefix('> > nested quoted text')).toEqual({
+            kind: 'quote',
+            text: '> > ',
+            quoteDepth: 2,
+            checkboxOffset: null,
+            visibilitySensitive: true,
+        });
+        expect(parseIndentPrefix('- [ ] task item')).toEqual({
+            kind: 'list',
+            text: '- [ ] ',
+            quoteDepth: 0,
+            checkboxOffset: 2,
+            visibilitySensitive: true,
+        });
+        expect(parseIndentPrefix('    indented paragraph')).toEqual({
+            kind: 'indent',
+            text: '    ',
+            quoteDepth: 0,
+            checkboxOffset: null,
+            visibilitySensitive: false,
+        });
+    });
+
+    it('returns null when a line has no indent prefix', () => {
+        expect(parseIndentPrefix('plain paragraph')).toBeNull();
     });
 });
 
