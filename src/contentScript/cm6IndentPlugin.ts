@@ -348,7 +348,8 @@ class WrappedLineIndentPlugin implements PluginValue {
         const viewportOrGeometryChanged = update.viewportChanged || update.geometryChanged;
         const externalRefreshTrigger =
             measurementsNeedRefresh || editorContentOrStateChanged || viewportOrGeometryChanged;
-        const shouldRebuildDecorations = externalRefreshTrigger || receivedMeasurementUpdate;
+        const syntaxTreeChanged = syntaxTree(update.startState) !== syntaxTree(update.state);
+        const shouldRebuildDecorations = externalRefreshTrigger || receivedMeasurementUpdate || syntaxTreeChanged;
 
         if (externalRefreshTrigger) {
             this.incompleteMeasurementRefreshSpent = false;

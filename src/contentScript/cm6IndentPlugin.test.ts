@@ -1,4 +1,5 @@
 import { markdown } from '@codemirror/lang-markdown';
+import { forceParsing } from '@codemirror/language';
 import { Compartment, EditorState } from '@codemirror/state';
 import type { Extension } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
@@ -489,6 +490,24 @@ describe('wrappedLineIndentExtension', () => {
 
         expect(decoratedLineNumbers).toEqual([1, 7]);
 
+        view.destroy();
+    });
+
+    it('rebuilds decorations when parser state changes without a document change', () => {
+        const view = createView(`- item\n\n${'plain paragraph\n\n'.repeat(400)}`, [markdown()]);
+
+        flushMeasureCycle(view);
+
+        const plugin = view.plugin(wrappedLineIndentExtension) as unknown as {
+            buildDecorations(): unknown;
+        };
+        const buildDecorationsSpy = jest.spyOn(plugin, 'buildDecorations');
+
+        expect(forceParsing(view, view.state.doc.length, 1000)).toBe(true);
+
+        expect(buildDecorationsSpy).toHaveBeenCalledTimes(1);
+
+        buildDecorationsSpy.mockRestore();
         view.destroy();
     });
 
