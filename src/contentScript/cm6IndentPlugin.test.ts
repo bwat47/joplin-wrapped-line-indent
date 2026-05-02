@@ -348,6 +348,55 @@ describe('wrappedLineIndentExtension', () => {
         view.destroy();
     });
 
+    it('applies an exact measurement on the one deferred follow-up refresh', () => {
+        const view = createView('> - item');
+        const dispatchSpy = jest.spyOn(view, 'dispatch');
+        let measurementAvailable = false;
+
+        coordsAtPosSpy.mockImplementation((position) => {
+            if (!measurementAvailable) {
+                return null;
+            }
+
+            const line = view.state.doc.lineAt(position);
+            const left = position <= line.from + 1 ? 0 : 44;
+            return { left, right: left, top: 0, bottom: 16 };
+        });
+
+        flushMeasureCycle(view);
+        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('38px');
+        expect(dispatchSpy).toHaveBeenCalledTimes(1);
+
+        measurementAvailable = true;
+        flushMeasureCycle(view);
+
+        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('54px');
+        expect(dispatchSpy).toHaveBeenCalledTimes(2);
+
+        dispatchSpy.mockRestore();
+        view.destroy();
+    });
+
+    it('stops self-refreshing after one incomplete follow-up measurement', () => {
+        const view = createView('> - item');
+        const dispatchSpy = jest.spyOn(view, 'dispatch');
+
+        coordsAtPosSpy.mockImplementation(() => null);
+
+        flushMeasureCycle(view);
+        expect(dispatchSpy).toHaveBeenCalledTimes(1);
+        expect(view.dom.querySelectorAll<HTMLElement>('.cm-wrapped-line-indent')).toHaveLength(1);
+
+        flushMeasureCycle(view);
+        expect(dispatchSpy).toHaveBeenCalledTimes(1);
+
+        flushMeasureCycle(view);
+        expect(dispatchSpy).toHaveBeenCalledTimes(1);
+
+        dispatchSpy.mockRestore();
+        view.destroy();
+    });
+
     it('skips fenced and indented code blocks using markdown syntax parsing', () => {
         const view = createView(
             '- list item\n\n```\n- fenced code\n```\n\n    - indented code\n\n- another list item',
