@@ -3,6 +3,7 @@ import { forceParsing } from '@codemirror/language';
 import { Compartment, EditorState } from '@codemirror/state';
 import type { Extension } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
+import type { CodeMirrorControl } from 'api/types';
 
 import {
     default as createContentScript,
@@ -61,12 +62,24 @@ describe('wrappedLineIndentExtension', () => {
 
     it('registers the legacy task-list checkbox theme with the plugin', () => {
         const extensionGroups: unknown[] = [];
-        createContentScript().plugin({
+        const codeMirrorWrapper: CodeMirrorControl = {
             cm6: {} as EditorView,
             addExtension: (extension) => {
                 extensionGroups.push(extension);
             },
-        });
+            editor: {},
+            supportsCommand: jest.fn(),
+            execCommand: jest.fn(),
+            registerCommand: jest.fn(),
+            joplinExtensions: {
+                completionSource: jest.fn(),
+                enableLanguageDataAutocomplete: { of: jest.fn() },
+                noteIdFacet: {},
+                setNoteIdEffect: {},
+            },
+        };
+
+        createContentScript().plugin(codeMirrorWrapper);
 
         expect(extensionGroups).toHaveLength(1);
         expect(extensionGroups[0]).toEqual(
