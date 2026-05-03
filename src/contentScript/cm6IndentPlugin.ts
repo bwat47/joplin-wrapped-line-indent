@@ -324,6 +324,10 @@ class WrappedLineIndentPlugin implements PluginValue {
         }
 
         if (shouldRebuildDecorations) {
+            if (update.docChanged) {
+                this.measuredLineWidths.clear();
+            }
+
             if (update.geometryChanged) {
                 this.markLinePaddingStale();
             }

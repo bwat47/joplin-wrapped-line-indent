@@ -412,6 +412,28 @@ describe('wrappedLineIndentExtension', () => {
         view.destroy();
     });
 
+    it('clears exact line measurements but keeps fallback widths after document edits', () => {
+        const view = createView('  - first item');
+        flushMeasureCycle(view);
+        flushMeasureCycle(view);
+
+        const plugin = view.plugin(wrappedLineIndentExtension) as unknown as {
+            fallbackPrefixWidths: Map<string, number>;
+            measuredLineWidths: Map<string, number>;
+        };
+        expect(plugin.measuredLineWidths.size).toBe(1);
+        expect(plugin.fallbackPrefixWidths.size).toBe(1);
+
+        view.dispatch({
+            changes: { from: view.state.doc.line(1).to, insert: 'x' },
+        });
+
+        expect(plugin.measuredLineWidths.size).toBe(0);
+        expect(plugin.fallbackPrefixWidths.size).toBe(1);
+
+        view.destroy();
+    });
+
     it('keeps list lines decorated immediately after indenting to an unmeasured prefix', () => {
         const view = createView('- item');
         flushMeasureCycle(view);
