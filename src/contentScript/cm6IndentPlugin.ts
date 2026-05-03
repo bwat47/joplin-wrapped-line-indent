@@ -286,6 +286,7 @@ class WrappedLineIndentPlugin implements PluginValue {
 
     private measurementSignature: string;
 
+    // Allows one extra refresh when coordinates are temporarily unavailable, without looping forever.
     private incompleteMeasurementRefreshSpent = false;
 
     private refreshFrame: number | null = null;
@@ -423,6 +424,7 @@ class WrappedLineIndentPlugin implements PluginValue {
             });
         }
 
+        // Prefer exact line measurements, then a recent equivalent-prefix width, then an estimate.
         const fallbackWidth = this.fallbackPrefixWidths.get(getFallbackPrefixKey(prefix.text));
         let decorationWidth = measuredWidth ?? fallbackWidth;
         if (decorationWidth === undefined && this.canUseEstimatedPrefixWidth()) {
