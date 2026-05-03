@@ -321,6 +321,42 @@ describe('wrappedLineIndentExtension', () => {
         view.destroy();
     });
 
+    it('remeasures a visible rendered task line even when that cache key already exists', () => {
+        const view = createView('- [ ] first task');
+        coordsAtPosSpy.mockImplementation((position) => {
+            const line = view.state.doc.lineAt(position);
+            const checkboxFrom = line.from + '- '.length;
+            const checkboxTo = checkboxFrom + '[ ]'.length;
+            const cursor = view.state.selection.main.head;
+            const revealsCheckboxMarkup = cursor >= checkboxFrom && cursor <= checkboxTo;
+            const prefixWidth = revealsCheckboxMarkup ? 56 : 40;
+            const left = position <= line.from + 1 ? 0 : prefixWidth;
+            return { left, right: left, top: 0, bottom: 16 };
+        });
+
+        flushMeasureCycle(view);
+        flushMeasureCycle(view);
+        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('50px');
+
+        const plugin = view.plugin(wrappedLineIndentExtension) as unknown as {
+            cachedPrefixWidths: Map<string, number>;
+        };
+        plugin.cachedPrefixWidths.set('task:rendered:- [ ] ', 16);
+
+        view.dispatch({ selection: { anchor: view.state.doc.line(1).from + '- ['.length } });
+        flushMeasureCycle(view);
+        flushMeasureCycle(view);
+        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('66px');
+
+        view.dispatch({ selection: { anchor: view.state.doc.line(1).to } });
+        flushMeasureCycle(view);
+        flushMeasureCycle(view);
+
+        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('50px');
+
+        view.destroy();
+    });
+
     it('does not remeasure unchanged block quote list lines after same-line edits', () => {
         const view = createView('> - first quoted item\n> - second quoted item');
         flushMeasureCycle(view);
@@ -373,23 +409,28 @@ describe('wrappedLineIndentExtension', () => {
         view.destroy();
     });
 
-    it('uses the smallest valid measurement when equivalent rendered task prefixes disagree', () => {
+    it('retries rendered task measurements when equivalent prefixes initially disagree', () => {
         const view = createView('  - [ ] first task\n  - [ ] second task');
-        const firstLine = view.state.doc.line(1);
+        let renderedMeasurementsDisagree = true;
 
         coordsAtPosSpy.mockImplementation((position) => {
             const line = view.state.doc.lineAt(position);
-            const prefixWidth = line.from === firstLine.from ? 56 : 32;
+            let prefixWidth = 56;
+
+            if (renderedMeasurementsDisagree && line.number === 2 && position > line.from + 1) {
+                prefixWidth = 32;
+                renderedMeasurementsDisagree = false;
+            }
+
             const left = position <= line.from + 1 ? 0 : prefixWidth;
             return { left, right: left, top: 0, bottom: 16 };
         });
 
         flushMeasureCycle(view);
         flushMeasureCycle(view);
-
         expect(
             [...view.dom.querySelectorAll<HTMLElement>('.cm-wrapped-line-indent')].map((line) => line.style.paddingLeft)
-        ).toEqual(['42px', '42px']);
+        ).toEqual(['66px', '66px']);
 
         view.destroy();
     });
