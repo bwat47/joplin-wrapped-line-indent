@@ -10,6 +10,7 @@ import {
     WidgetType,
 } from '@codemirror/view';
 import type { SyntaxNode } from '@lezer/common';
+import type { CodeMirrorControl } from 'api/types';
 
 const WRAPPED_LINE_CLASS = 'cm-wrapped-line-indent';
 const TASK_LIST_CHECKBOX_PATTERN = /\[[ xX]\]/;
@@ -17,11 +18,6 @@ const LEGACY_TASK_MARKER_SELECTOR = '.cm-ext-checkbox-toggle.cm-taskMarker';
 const LIST_PREFIX_PATTERN = /^([ \t]*(?:[-*+]|\d+[.)])[ \t]+(?:\[[ xX]\][ \t]+)?)/;
 
 const measurementsChanged = StateEffect.define<void>();
-
-interface CodeMirrorWrapper {
-    cm6?: EditorView;
-    addExtension(extension: unknown): void;
-}
 
 interface MeasurementTarget {
     fallbackKey: string;
@@ -581,7 +577,7 @@ export const legacyTaskListCheckboxTheme = EditorView.theme({
 
 export default () => {
     return {
-        plugin: (codeMirrorWrapper: CodeMirrorWrapper) => {
+        plugin: (codeMirrorWrapper: CodeMirrorControl) => {
             if (!codeMirrorWrapper.cm6) {
                 return;
             }
