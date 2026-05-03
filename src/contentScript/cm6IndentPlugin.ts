@@ -1,13 +1,5 @@
 import { foldedRanges, syntaxTree, syntaxTreeAvailable } from '@codemirror/language';
-import {
-    RangeSetBuilder,
-    StateEffect,
-    countColumn,
-    type EditorSelection,
-    type EditorState,
-    type Line,
-    type Text,
-} from '@codemirror/state';
+import { RangeSetBuilder, StateEffect, countColumn, type EditorState, type Line, type Text } from '@codemirror/state';
 import {
     Decoration,
     type DecorationSet,
@@ -23,7 +15,6 @@ const WRAPPED_LINE_CLASS = 'cm-wrapped-line-indent';
 const TASK_LIST_CHECKBOX_PATTERN = /\[[ xX]\]/;
 const LEGACY_TASK_MARKER_SELECTOR = '.cm-ext-checkbox-toggle.cm-taskMarker';
 const LIST_PREFIX_PATTERN = /^([ \t]*(?:[-*+]|\d+[.)])[ \t]+(?:\[[ xX]\][ \t]+)?)/;
-const TASK_WIDTH_SPREAD_TOLERANCE_PX = 1;
 
 const measurementsChanged = StateEffect.define<void>();
 
@@ -44,8 +35,6 @@ interface MeasureReadResult {
     widths: Map<string, number>;
 }
 
-type CollapsedMeasuredWidth = { needsRetry: true } | { needsRetry: false; width: number };
-
 export type IndentPrefixKind = 'indent' | 'list' | 'quote' | 'quote-list';
 
 export interface ParsedIndentPrefix {
@@ -53,7 +42,6 @@ export interface ParsedIndentPrefix {
     text: string;
     quoteDepth: number;
     checkboxOffset: number | null;
-    visibilitySensitive: boolean;
 }
 
 type LinePaddingMeasurementStatus = 'unknown' | 'stale' | 'measured';
@@ -61,11 +49,6 @@ type LinePaddingMeasurementStatus = 'unknown' | 'stale' | 'measured';
 interface LinePaddingMeasurement {
     status: LinePaddingMeasurementStatus;
     value: number;
-}
-
-interface TaskMeasurementContext {
-    confirmVisibleMeasurements: boolean;
-    selectionBeforeUpdate: EditorSelection | null;
 }
 
 class TabWidget extends WidgetType {
@@ -136,7 +119,6 @@ export function parseIndentPrefix(lineText: string): ParsedIndentPrefix | null {
                 quoteDepth: getQuoteDepth(quotePrefix),
                 checkboxOffset:
                     listPrefix.checkboxOffset === null ? null : quotePrefix.length + listPrefix.checkboxOffset,
-                visibilitySensitive: true,
             };
         }
 
@@ -145,7 +127,6 @@ export function parseIndentPrefix(lineText: string): ParsedIndentPrefix | null {
             text: quotePrefix,
             quoteDepth: getQuoteDepth(quotePrefix),
             checkboxOffset: null,
-            visibilitySensitive: true,
         };
     }
 
@@ -156,7 +137,6 @@ export function parseIndentPrefix(lineText: string): ParsedIndentPrefix | null {
             text: listPrefix.text,
             quoteDepth: 0,
             checkboxOffset: listPrefix.checkboxOffset,
-            visibilitySensitive: listPrefix.checkboxOffset !== null,
         };
     }
 
@@ -167,7 +147,6 @@ export function parseIndentPrefix(lineText: string): ParsedIndentPrefix | null {
             text: whitespaceMatch[1],
             quoteDepth: 0,
             checkboxOffset: null,
-            visibilitySensitive: false,
         };
     }
 
@@ -276,61 +255,12 @@ function createLineDecoration(width: number, linePaddingLeft: number): Decoratio
     });
 }
 
-function selectionIntersectsRange(selection: EditorSelection, from: number, to: number): boolean {
-    return selection.ranges.some((range) => range.from <= to && range.to >= from);
-}
-
-function hasSelectionInRange(state: EditorState, from: number, to: number): boolean {
-    return selectionIntersectsRange(state.selection, from, to);
-}
-
-function getTaskListCheckboxRange(prefix: ParsedIndentPrefix, line: Line): MeasurementTarget | null {
-    if (prefix.checkboxOffset === null) {
-        return null;
-    }
-
-    return {
-        from: line.from + prefix.checkboxOffset,
-        to: line.from + prefix.checkboxOffset + '[ ]'.length,
-    };
-}
-
-function getPrefixCacheKey(prefix: ParsedIndentPrefix, line: Line, state: EditorState): string {
-    if (!prefix.visibilitySensitive) {
-        return prefix.text;
-    }
-
-    const states: string[] = [];
-    if (prefix.quoteDepth > 0) {
-        states.push(`quote:${hasSelectionInRange(state, line.from, line.to) ? 'selected' : 'unselected'}`);
-    }
-
-    if (prefix.checkboxOffset !== null) {
-        const checkboxRange = getTaskListCheckboxRange(prefix, line);
-        const checkboxVisibilityState =
-            checkboxRange && hasSelectionInRange(state, checkboxRange.from, checkboxRange.to) ? 'revealed' : 'rendered';
-        states.push(`task:${checkboxVisibilityState}`);
-    }
-
-    return `${states.join(':')}:${prefix.text}`;
+function getLineMeasurementKey(line: Line, prefix: ParsedIndentPrefix): string {
+    return `${line.from}:${prefix.text}`;
 }
 
 function getMeasurementSignature(view: EditorView): string {
     return [view.defaultCharacterWidth, view.defaultLineHeight, view.scaleX, view.scaleY, view.state.tabSize].join(':');
-}
-
-function collapseMeasuredWidth(cacheKey: string, widths: number[]): CollapsedMeasuredWidth {
-    const measuredWidth = Math.min(...widths);
-    if (!cacheKey.includes('task:') || widths.length < 2) {
-        return { needsRetry: false, width: measuredWidth };
-    }
-
-    const widestWidth = Math.max(...widths);
-    if (widestWidth - measuredWidth > TASK_WIDTH_SPREAD_TOLERANCE_PX) {
-        return { needsRetry: true };
-    }
-
-    return { needsRetry: false, width: measuredWidth };
 }
 
 class WrappedLineIndentPlugin implements PluginValue {
@@ -338,9 +268,9 @@ class WrappedLineIndentPlugin implements PluginValue {
 
     private destroyed = false;
 
-    private readonly cachedPrefixWidths = new Map<string, number>();
+    private readonly measuredLineWidths = new Map<string, number>();
 
-    private readonly pendingMeasurements = new Map<string, MeasurementTarget[]>();
+    private readonly pendingMeasurements = new Map<string, MeasurementTarget>();
 
     private measureScheduled = false;
 
@@ -348,12 +278,9 @@ class WrappedLineIndentPlugin implements PluginValue {
 
     private incompleteMeasurementRefreshSpent = false;
 
-    private taskMeasurementContext: TaskMeasurementContext = {
-        confirmVisibleMeasurements: false,
-        selectionBeforeUpdate: null,
-    };
-
     private refreshFrame: number | null = null;
+
+    private forceVisibleLineMeasurements = false;
 
     private linePadding: LinePaddingMeasurement = { status: 'unknown', value: 0 };
 
@@ -368,7 +295,6 @@ class WrappedLineIndentPlugin implements PluginValue {
         const measurementsNeedRefresh = nextMeasurementSignature !== this.measurementSignature;
         if (measurementsNeedRefresh) {
             this.measurementSignature = nextMeasurementSignature;
-            this.cachedPrefixWidths.clear();
             this.markLinePaddingStale();
         }
 
@@ -387,20 +313,14 @@ class WrappedLineIndentPlugin implements PluginValue {
         }
 
         if (shouldRebuildDecorations) {
-            this.taskMeasurementContext = {
-                confirmVisibleMeasurements: measurementsNeedRefresh || update.focusChanged || viewportOrGeometryChanged,
-                selectionBeforeUpdate: update.selectionSet ? update.startState.selection : null,
-            };
-
             if (update.geometryChanged) {
                 this.markLinePaddingStale();
             }
 
+            this.forceVisibleLineMeasurements =
+                measurementsNeedRefresh || update.selectionSet || update.focusChanged || viewportOrGeometryChanged;
             this.decorations = this.buildDecorations();
-            this.taskMeasurementContext = {
-                confirmVisibleMeasurements: false,
-                selectionBeforeUpdate: null,
-            };
+            this.forceVisibleLineMeasurements = false;
             this.scheduleMeasure();
         }
     }
@@ -415,7 +335,7 @@ class WrappedLineIndentPlugin implements PluginValue {
         }
 
         this.pendingMeasurements.clear();
-        this.cachedPrefixWidths.clear();
+        this.measuredLineWidths.clear();
     }
 
     private buildDecorations(): DecorationSet {
@@ -456,19 +376,13 @@ class WrappedLineIndentPlugin implements PluginValue {
             return;
         }
 
-        const cacheKey = getPrefixCacheKey(prefix, line, this.view.state);
-        const cachedWidth = this.cachedPrefixWidths.get(cacheKey);
-        const shouldMeasureVisibleTaskPrefix = this.shouldMeasureVisibleTaskPrefix(prefix, line);
-        if (cachedWidth === undefined || shouldMeasureVisibleTaskPrefix) {
-            const targets = this.pendingMeasurements.get(cacheKey);
-            if (targets) {
-                targets.push({ from: line.from, to: prefixTo });
-            } else {
-                this.pendingMeasurements.set(cacheKey, [{ from: line.from, to: prefixTo }]);
-            }
+        const lineKey = getLineMeasurementKey(line, prefix);
+        const measuredWidth = this.measuredLineWidths.get(lineKey);
+        if (measuredWidth === undefined || this.forceVisibleLineMeasurements) {
+            this.pendingMeasurements.set(lineKey, { from: line.from, to: prefixTo });
         }
 
-        let decorationWidth = cachedWidth ?? this.getCachedWidthForPrefix(prefix.text);
+        let decorationWidth = measuredWidth;
         if (decorationWidth === undefined && this.canUseEstimatedPrefixWidth()) {
             decorationWidth = estimatePrefixWidth(prefix.text, this.view);
         }
@@ -478,44 +392,6 @@ class WrappedLineIndentPlugin implements PluginValue {
         }
 
         addTabReplacementDecorations(builder, line, prefix.text, this.view);
-    }
-
-    private getCachedWidthForPrefix(prefix: string): number | undefined {
-        const keySuffix = `:${prefix}`;
-        for (const [cacheKey, width] of this.cachedPrefixWidths) {
-            if (cacheKey === prefix || cacheKey.endsWith(keySuffix)) {
-                return width;
-            }
-        }
-
-        return undefined;
-    }
-
-    private shouldMeasureVisibleTaskPrefix(prefix: ParsedIndentPrefix, line: Line): boolean {
-        if (prefix.checkboxOffset === null) {
-            return false;
-        }
-
-        if (this.taskMeasurementContext.confirmVisibleMeasurements) {
-            return true;
-        }
-
-        if (!this.taskMeasurementContext.selectionBeforeUpdate) {
-            return false;
-        }
-
-        const checkboxRange = getTaskListCheckboxRange(prefix, line);
-        if (!checkboxRange) {
-            return false;
-        }
-
-        return (
-            selectionIntersectsRange(
-                this.taskMeasurementContext.selectionBeforeUpdate,
-                checkboxRange.from,
-                checkboxRange.to
-            ) || selectionIntersectsRange(this.view.state.selection, checkboxRange.from, checkboxRange.to)
-        );
     }
 
     private scheduleMeasure(): void {
@@ -528,11 +404,8 @@ class WrappedLineIndentPlugin implements PluginValue {
         }
 
         this.measureScheduled = true;
-        const targets = new Map(
-            [...this.pendingMeasurements].map(([cacheKey, targetList]) => [cacheKey, [...targetList]])
-        );
+        const targets = new Map(this.pendingMeasurements);
         const measuredDoc = this.view.state.doc;
-        const measuredSelection = this.view.state.selection;
 
         this.view.requestMeasure<MeasureReadResult>({
             read: (view) => {
@@ -540,7 +413,7 @@ class WrappedLineIndentPlugin implements PluginValue {
                     return this.createEmptyMeasureResult();
                 }
 
-                return this.measurePrefixes(view, targets, measuredDoc, measuredSelection, this.linePadding.value);
+                return this.measurePrefixes(view, targets, measuredDoc, this.linePadding.value);
             },
             write: (result) => {
                 if (this.destroyed) {
@@ -561,9 +434,9 @@ class WrappedLineIndentPlugin implements PluginValue {
                 }
                 this.linePadding = { status: 'measured', value: result.linePaddingLeft };
 
-                for (const [prefix, width] of result.widths) {
-                    if (this.cachedPrefixWidths.get(prefix) !== width) {
-                        this.cachedPrefixWidths.set(prefix, width);
+                for (const [lineKey, width] of result.widths) {
+                    if (this.measuredLineWidths.get(lineKey) !== width) {
+                        this.measuredLineWidths.set(lineKey, width);
                         changed = true;
                     }
                 }
@@ -627,50 +500,33 @@ class WrappedLineIndentPlugin implements PluginValue {
 
     private measurePrefixes(
         view: EditorView,
-        targets: Map<string, MeasurementTarget[]>,
+        targets: Map<string, MeasurementTarget>,
         measuredDoc: Text,
-        measuredSelection: EditorSelection,
         fallbackPaddingLeft: number
     ): MeasureReadResult {
         const measuredWidths = new Map<string, number>();
         const linePaddingLeft = getLinePaddingLeft(view, fallbackPaddingLeft);
-        if (view.state.doc !== measuredDoc || view.state.selection !== measuredSelection) {
+        if (view.state.doc !== measuredDoc) {
             return { linePaddingLeft, isStale: true, needsRetry: false, widths: measuredWidths };
         }
 
         let needsRetry = false;
-        for (const [cacheKey, targetList] of targets) {
-            const widths: number[] = [];
+        for (const [lineKey, target] of targets) {
+            const startCoords = view.coordsAtPos(target.from, 1);
+            const endCoords = view.coordsAtPos(target.to, -1);
 
-            for (const target of targetList) {
-                const startCoords = view.coordsAtPos(target.from, 1);
-                const endCoords = view.coordsAtPos(target.to, -1);
-
-                if (!startCoords || !endCoords) {
-                    needsRetry = true;
-                    continue;
-                }
-
-                const width = endCoords.left - startCoords.left;
-                if (width <= 0) {
-                    needsRetry = true;
-                    continue;
-                }
-
-                widths.push(width);
-            }
-
-            if (widths.length === 0) {
-                continue;
-            }
-
-            const collapsedWidth = collapseMeasuredWidth(cacheKey, widths);
-            if (collapsedWidth.needsRetry) {
+            if (!startCoords || !endCoords) {
                 needsRetry = true;
                 continue;
             }
 
-            measuredWidths.set(cacheKey, collapsedWidth.width);
+            const width = endCoords.left - startCoords.left;
+            if (width <= 0) {
+                needsRetry = true;
+                continue;
+            }
+
+            measuredWidths.set(lineKey, width);
         }
 
         return { linePaddingLeft, isStale: false, needsRetry, widths: measuredWidths };

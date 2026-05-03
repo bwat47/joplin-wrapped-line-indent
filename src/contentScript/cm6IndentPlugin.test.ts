@@ -201,9 +201,10 @@ describe('wrappedLineIndentExtension', () => {
 
     it('keeps block quote lines decorated while remeasuring a new selection state', () => {
         const view = createView('> - first quoted item');
+        let measuredPrefixWidth = 16;
         coordsAtPosSpy.mockImplementation((position) => {
             const line = view.state.doc.lineAt(position);
-            const left = position <= line.from + 1 ? 0 : 16;
+            const left = position <= line.from + 1 ? 0 : measuredPrefixWidth;
             return { left, right: left, top: 0, bottom: 16 };
         });
 
@@ -215,9 +216,10 @@ describe('wrappedLineIndentExtension', () => {
 
         expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('26px');
 
+        measuredPrefixWidth = 28;
         flushMeasureCycle(view);
         flushMeasureCycle(view);
-        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('26px');
+        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('38px');
 
         view.destroy();
     });
@@ -274,7 +276,7 @@ describe('wrappedLineIndentExtension', () => {
         flushMeasureCycle(view);
         flushMeasureCycle(view);
 
-        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('34px');
+        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('30px');
 
         view.destroy();
     });
@@ -321,38 +323,21 @@ describe('wrappedLineIndentExtension', () => {
         view.destroy();
     });
 
-    it('remeasures a visible rendered task line even when that cache key already exists', () => {
-        const view = createView('- [ ] first task');
+    it('keeps direct task measurements isolated per visible line', () => {
+        const view = createView('- [ ] first task\n- [ ] second task');
         coordsAtPosSpy.mockImplementation((position) => {
             const line = view.state.doc.lineAt(position);
-            const checkboxFrom = line.from + '- '.length;
-            const checkboxTo = checkboxFrom + '[ ]'.length;
-            const cursor = view.state.selection.main.head;
-            const revealsCheckboxMarkup = cursor >= checkboxFrom && cursor <= checkboxTo;
-            const prefixWidth = revealsCheckboxMarkup ? 56 : 40;
+            const prefixWidth = line.number === 1 ? 40 : 24;
             const left = position <= line.from + 1 ? 0 : prefixWidth;
             return { left, right: left, top: 0, bottom: 16 };
         });
 
         flushMeasureCycle(view);
         flushMeasureCycle(view);
-        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('50px');
 
-        const plugin = view.plugin(wrappedLineIndentExtension) as unknown as {
-            cachedPrefixWidths: Map<string, number>;
-        };
-        plugin.cachedPrefixWidths.set('task:rendered:- [ ] ', 16);
-
-        view.dispatch({ selection: { anchor: view.state.doc.line(1).from + '- ['.length } });
-        flushMeasureCycle(view);
-        flushMeasureCycle(view);
-        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('66px');
-
-        view.dispatch({ selection: { anchor: view.state.doc.line(1).to } });
-        flushMeasureCycle(view);
-        flushMeasureCycle(view);
-
-        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('50px');
+        expect(
+            [...view.dom.querySelectorAll<HTMLElement>('.cm-wrapped-line-indent')].map((line) => line.style.paddingLeft)
+        ).toEqual(['50px', '34px']);
 
         view.destroy();
     });
@@ -385,7 +370,7 @@ describe('wrappedLineIndentExtension', () => {
         view.destroy();
     });
 
-    it('measures another visible line when one occurrence of the same prefix is temporarily unavailable', () => {
+    it('uses a fallback estimate when one visible line is temporarily unavailable', () => {
         const view = createView('  - first item\n  - second item');
         const secondLine = view.state.doc.line(2);
 
@@ -404,12 +389,12 @@ describe('wrappedLineIndentExtension', () => {
 
         expect(
             [...view.dom.querySelectorAll<HTMLElement>('.cm-wrapped-line-indent')].map((line) => line.style.paddingLeft)
-        ).toEqual(['50px', '50px']);
+        ).toEqual(['50px', '38px']);
 
         view.destroy();
     });
 
-    it('retries rendered task measurements when equivalent prefixes initially disagree', () => {
+    it('keeps different direct task measurements instead of collapsing equivalent prefixes', () => {
         const view = createView('  - [ ] first task\n  - [ ] second task');
         let renderedMeasurementsDisagree = true;
 
@@ -430,7 +415,7 @@ describe('wrappedLineIndentExtension', () => {
         flushMeasureCycle(view);
         expect(
             [...view.dom.querySelectorAll<HTMLElement>('.cm-wrapped-line-indent')].map((line) => line.style.paddingLeft)
-        ).toEqual(['66px', '66px']);
+        ).toEqual(['66px', '42px']);
 
         view.destroy();
     });
@@ -574,21 +559,18 @@ describe('parseIndentPrefix', () => {
             text: '> - ',
             quoteDepth: 1,
             checkboxOffset: null,
-            visibilitySensitive: true,
         });
         expect(parseIndentPrefix('> > 12. nested quoted item')).toEqual({
             kind: 'quote-list',
             text: '> > 12. ',
             quoteDepth: 2,
             checkboxOffset: null,
-            visibilitySensitive: true,
         });
         expect(parseIndentPrefix('> * [x] quoted task')).toEqual({
             kind: 'quote-list',
             text: '> * [x] ',
             quoteDepth: 1,
             checkboxOffset: 4,
-            visibilitySensitive: true,
         });
     });
 
@@ -598,28 +580,24 @@ describe('parseIndentPrefix', () => {
             text: '> ',
             quoteDepth: 1,
             checkboxOffset: null,
-            visibilitySensitive: true,
         });
         expect(parseIndentPrefix('> > nested quoted text')).toEqual({
             kind: 'quote',
             text: '> > ',
             quoteDepth: 2,
             checkboxOffset: null,
-            visibilitySensitive: true,
         });
         expect(parseIndentPrefix('- [ ] task item')).toEqual({
             kind: 'list',
             text: '- [ ] ',
             quoteDepth: 0,
             checkboxOffset: 2,
-            visibilitySensitive: true,
         });
         expect(parseIndentPrefix('    indented paragraph')).toEqual({
             kind: 'indent',
             text: '    ',
             quoteDepth: 0,
             checkboxOffset: null,
-            visibilitySensitive: false,
         });
     });
 
