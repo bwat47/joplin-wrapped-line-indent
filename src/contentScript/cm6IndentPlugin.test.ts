@@ -238,6 +238,34 @@ describe('wrappedLineIndentExtension', () => {
         view.destroy();
     });
 
+    it('applies the latest block quote selection state when selection changes again before measurement runs', () => {
+        const view = createView('> - first quoted item\n> - second quoted item');
+        coordsAtPosSpy.mockImplementation((position) => {
+            const line = view.state.doc.lineAt(position);
+            const hasSelectionOnLine = view.state.selection.ranges.some(
+                (range) => range.from <= line.to && range.to >= line.from
+            );
+            const characterWidth = hasSelectionOnLine ? 8 : 4;
+            const left = position <= line.from + 1 ? 0 : 4 * characterWidth;
+            return { left, right: left, top: 0, bottom: 16 };
+        });
+
+        flushMeasureCycle(view);
+        flushMeasureCycle(view);
+
+        view.dispatch({ selection: { anchor: view.state.doc.line(1).from, head: view.state.doc.line(2).to } });
+        view.dispatch({ selection: { anchor: view.state.doc.line(2).to } });
+
+        flushMeasureCycle(view);
+        flushMeasureCycle(view);
+
+        expect(
+            [...view.dom.querySelectorAll<HTMLElement>('.cm-wrapped-line-indent')].map((line) => line.style.paddingLeft)
+        ).toEqual(['26px', '42px']);
+
+        view.destroy();
+    });
+
     it('remeasures task list prefixes when selection changes checkbox visibility state', () => {
         const view = createView('- [ ] first task\n- [ ] second task');
         coordsAtPosSpy.mockImplementation((position) => {
@@ -599,6 +627,46 @@ describe('wrappedLineIndentExtension', () => {
         expect(dispatchSpy).toHaveBeenCalledTimes(2);
 
         dispatchSpy.mockRestore();
+        view.destroy();
+    });
+
+    it('converges to the latest selection state before a deferred follow-up refresh settles', () => {
+        const view = createView('> - first quoted item\n> - second quoted item');
+        let measurementAvailable = true;
+
+        coordsAtPosSpy.mockImplementation((position) => {
+            if (!measurementAvailable) {
+                return null;
+            }
+
+            const line = view.state.doc.lineAt(position);
+            const hasSelectionOnLine = view.state.selection.ranges.some(
+                (range) => range.from <= line.to && range.to >= line.from
+            );
+            const characterWidth = hasSelectionOnLine ? 8 : 4;
+            const left = position <= line.from + 1 ? 0 : 4 * characterWidth;
+            return { left, right: left, top: 0, bottom: 16 };
+        });
+
+        flushMeasureCycle(view);
+        flushMeasureCycle(view);
+
+        measurementAvailable = false;
+        view.dispatch({ selection: { anchor: view.state.doc.line(1).from, head: view.state.doc.line(2).to } });
+
+        (view as MeasurableEditorView).measure(false);
+
+        view.dispatch({ selection: { anchor: view.state.doc.line(2).to } });
+        measurementAvailable = true;
+
+        flushAnimationFrames();
+        flushMeasureCycle(view);
+        flushMeasureCycle(view);
+
+        expect(
+            [...view.dom.querySelectorAll<HTMLElement>('.cm-wrapped-line-indent')].map((line) => line.style.paddingLeft)
+        ).toEqual(['26px', '42px']);
+
         view.destroy();
     });
 
