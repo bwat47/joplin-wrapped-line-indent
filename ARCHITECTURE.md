@@ -1,50 +1,58 @@
-A CodeMirror 6 `ViewPlugin` that implements a hanging indent by dynamically calculating the pixel width of line prefixes and applying offset CSS decorations.
+A CodeMirror 6 `ViewPlugin` that implements hanging indentation by measuring the rendered pixel width of Markdown line prefixes and applying offset CSS decorations.
 
 ---
 
 ### 1. Core Mechanism
 
-The plugin achieves alignment using two complementary CSS properties applied to the line via `Decoration.line`:
+The plugin aligns wrapped text with the end of each line prefix using a line decoration with two complementary CSS properties:
 
-- **`padding-left`**: Offset by `PrefixWidth + BasePadding`.
-- **`text-indent`**: Offset by `-PrefixWidth`.
+- **`padding-left`**: `PrefixWidth + BasePadding`
+- **`text-indent`**: `-PrefixWidth`
 
-This ensures the first line remains at the gutter margin while wrapped lines align with the end of the prefix.
+This keeps the first visual line at the editor margin while wrapped visual lines start after the Markdown prefix.
 
-### 2. State and Decoration Lifecycle
+### 2. Prefix Detection and Decoration Lifecycle
 
-- **`buildDecorations`**: Scans `view.visibleRanges` and identifies line prefixes using `parseIndentPrefix`, which returns `ParsedIndentPrefix` metadata describing the raw prefix text, quote depth, task checkbox offset, and whether the prefix width depends on markup visibility.
-- **Exclusion Logic**: Lines within `CodeBlock`, `FencedCode`, `CodeInfo`, or `HorizontalRule` nodes are ignored via `isInIndentExcludedSyntax`.
-- **Tab Replacement**: Tab characters in the prefix are replaced by a `TabWidget`. This transforms an abstract tab into a measurable DOM element with a fixed `inline-style` width.
+- **`buildDecorations`**: Scans only `view.visibleRanges`, parses each visible line with `parseIndentPrefix`, and decorates lines with prefixes.
+- **Prefix metadata**: `ParsedIndentPrefix` records the prefix kind, raw prefix text, quote depth, and task checkbox offset. It does not encode selection-derived render states.
+- **Direct line keys**: Exact measurements are keyed by visible line position and prefix text via `getLineMeasurementKey`.
+- **Forced visible remeasurement**: Selection, focus, viewport, geometry, and measurement-signature changes pass an explicit `forceVisibleLineMeasurements` option through `buildDecorations` so visible lines are remeasured while their previous widths remain displayed.
+- **Exclusion logic**: Lines inside `CodeBlock`, `FencedCode`, `CodeInfo`, or `HorizontalRule` syntax nodes are skipped.
+- **Tab replacement**: Tabs in measured prefixes are replaced with `TabWidget` instances so the rendered tab width is stable and measurable.
 
 ### 3. Measurement Pipeline
 
-To prevent layout thrashing, the plugin utilizes the `view.requestMeasure` API, splitting the process into **Read** and **Write** phases:
+To avoid layout thrashing, the plugin uses CodeMirror's `view.requestMeasure` read/write phases:
 
-- **Read Phase (`measurePrefixes`)**: Uses `view.coordsAtPos` to retrieve the viewport coordinates for the start (`from`) and end (`to`) of the prefix. The width is derived from `endCoords.left - startCoords.left`.
-- **Write Phase**: Updates `cachedPrefixWidths` and dispatches a `StateEffect` (`measurementsChanged`) to trigger a re-render with the new dimensions.
-- **Retry Logic**: Allows one deferred follow-up refresh when prefix coordinates are temporarily unavailable, then waits for the next external update rather than continuously dispatching refreshes.
+- **Read phase (`measurePrefixes`)**: For each pending visible line, calls `view.coordsAtPos` at the prefix start and end, then computes `endCoords.left - startCoords.left`.
+- **Write phase**: Stores successful measurements in `measuredLineWidths`, updates fallback prefix widths, records measured line padding, and dispatches `measurementsChanged` when decorations need to refresh.
+- **Stale document guard**: If the document changed before the measurement read completes, the result is discarded and measurement is rescheduled.
+- **Retry logic**: If coordinates are temporarily unavailable, one deferred refresh is allowed; after that, the plugin waits for the next external editor update rather than repeatedly dispatching refreshes.
 
 ### 4. Tab vs. Space Handling
 
 The plugin treats tabs and spaces as physical layout objects:
 
-- **Spaces**: Measured directly via character coordinates.
-- **Tabs**: Assigned a pixel width using `getTabReplacementWidth`, which combines `view.state.tabSize` and a scale-aware character width derived from `view.defaultCharacterWidth`.
-- **Precision**: While `view.defaultCharacterWidth` is an estimate, it remains internally consistent. Since the `TabWidget` enforces that specific width in the DOM, `coordsAtPos` measures the _resulting_ layout, ensuring the negative `text-indent` matches the physical space occupied by the tab.
+- **Spaces**: Measured directly through character coordinates.
+- **Tabs**: Replaced by `TabWidget` with a width from `getTabReplacementWidth`, based on `view.state.tabSize` and `view.defaultCharacterWidth / view.scaleX`.
+- **Precision**: The tab widget enforces the same width used by the estimate, so later `coordsAtPos` measurements observe the actual rendered layout.
 
-### 5. Caching and Invalidation
+### 5. Caching and Fallbacks
 
-- **`cachedPrefixWidths`**: A Map that stores widths to avoid redundant DOM lookups.
-- **Cache Keys**: Derived via `getPrefixCacheKey` from the parsed prefix metadata. For elements like blockquotes (`>`) or checkboxes (`[ ]`), the key includes selection state to account for Joplin’s "markup visibility" (where markers may hide/show based on cursor proximity).
-- **`measurementSignature`**: Tracks `defaultCharacterWidth`, `defaultLineHeight`, and `scaleX/Y`. If these change (e.g., zoom or font swap), the cache is purged and re-measurement is scheduled.
+- **`measuredLineWidths`**: Exact per-visible-line measurements keyed by line start and prefix text. This is the source of truth for rendered width.
+- **`fallbackPrefixWidths`**: Display-only fallback widths keyed by normalized prefix text. Task checkbox states (`[ ]`, `[x]`, `[X]`) share a fallback key so checkbox toggles can reuse a recent width while direct measurement catches up.
+- **Fallback order**: Decorations use exact line width first, then fallback prefix width, then `estimatePrefixWidth`.
+- **Measurement remains authoritative**: Fallback widths never suppress measurement. Missing exact line widths, or forced visible remeasurement, still queue `coordsAtPos` measurement.
+- **Invalidation**: `measuredLineWidths` is cleared on document changes to avoid stale line-position growth. `fallbackPrefixWidths` is kept across document, selection, focus, viewport, and geometry changes to reduce flicker, but is cleared when the measurement signature changes.
+- **`measurementSignature`**: Tracks `defaultCharacterWidth`, `defaultLineHeight`, `scaleX`, `scaleY`, and `tabSize`. Changes indicate font, zoom, scale, or tab metrics may have invalidated pixel widths.
 
 ### 6. Reactivity
 
-The plugin updates on:
+The plugin rebuilds decorations and/or remeasures on:
 
-- `docChanged`: New content or prefix changes.
-- `geometryChanged` / `viewportChanged`: Changes in window size or scrolling.
-- `selectionSet`: Required for visibility-sensitive prefixes that change width when selected.
-- `focusChanged`: Rebuilds decorations when editor focus state changes.
-- `measurementsChanged` (internal `StateEffect`): Applies newly measured widths without waiting for unrelated editor updates.
+- `docChanged`: Content or prefixes changed; exact line measurements are cleared, fallback widths are retained.
+- `selectionSet`: Joplin render-markup visibility may change; visible lines are remeasured without clearing displayed widths.
+- `focusChanged`: Editor render state may change; visible lines are remeasured.
+- `geometryChanged` / `viewportChanged`: Layout or visible ranges changed; visible lines are remeasured.
+- Syntax tree changes: Decorations are rebuilt when parsing state changes, so code blocks and horizontal rules are included or excluded correctly.
+- `measurementsChanged`: Internal effect used to apply newly measured widths without waiting for unrelated editor updates.
