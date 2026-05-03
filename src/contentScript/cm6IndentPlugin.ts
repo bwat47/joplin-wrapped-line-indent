@@ -63,6 +63,11 @@ interface LinePaddingMeasurement {
     value: number;
 }
 
+interface TaskMeasurementContext {
+    confirmVisibleMeasurements: boolean;
+    selectionBeforeUpdate: EditorSelection | null;
+}
+
 class TabWidget extends WidgetType {
     public constructor(private readonly width: number) {
         super();
@@ -343,9 +348,10 @@ class WrappedLineIndentPlugin implements PluginValue {
 
     private incompleteMeasurementRefreshSpent = false;
 
-    private confirmVisibleTaskMeasurements = false;
-
-    private selectionBeforeUpdate: EditorSelection | null = null;
+    private taskMeasurementContext: TaskMeasurementContext = {
+        confirmVisibleMeasurements: false,
+        selectionBeforeUpdate: null,
+    };
 
     private refreshFrame: number | null = null;
 
@@ -381,17 +387,20 @@ class WrappedLineIndentPlugin implements PluginValue {
         }
 
         if (shouldRebuildDecorations) {
-            this.confirmVisibleTaskMeasurements =
-                measurementsNeedRefresh || update.focusChanged || viewportOrGeometryChanged;
-            this.selectionBeforeUpdate = update.selectionSet ? update.startState.selection : null;
+            this.taskMeasurementContext = {
+                confirmVisibleMeasurements: measurementsNeedRefresh || update.focusChanged || viewportOrGeometryChanged,
+                selectionBeforeUpdate: update.selectionSet ? update.startState.selection : null,
+            };
 
             if (update.geometryChanged) {
                 this.markLinePaddingStale();
             }
 
             this.decorations = this.buildDecorations();
-            this.confirmVisibleTaskMeasurements = false;
-            this.selectionBeforeUpdate = null;
+            this.taskMeasurementContext = {
+                confirmVisibleMeasurements: false,
+                selectionBeforeUpdate: null,
+            };
             this.scheduleMeasure();
         }
     }
@@ -487,11 +496,11 @@ class WrappedLineIndentPlugin implements PluginValue {
             return false;
         }
 
-        if (this.confirmVisibleTaskMeasurements) {
+        if (this.taskMeasurementContext.confirmVisibleMeasurements) {
             return true;
         }
 
-        if (!this.selectionBeforeUpdate) {
+        if (!this.taskMeasurementContext.selectionBeforeUpdate) {
             return false;
         }
 
@@ -501,8 +510,11 @@ class WrappedLineIndentPlugin implements PluginValue {
         }
 
         return (
-            selectionIntersectsRange(this.selectionBeforeUpdate, checkboxRange.from, checkboxRange.to) ||
-            selectionIntersectsRange(this.view.state.selection, checkboxRange.from, checkboxRange.to)
+            selectionIntersectsRange(
+                this.taskMeasurementContext.selectionBeforeUpdate,
+                checkboxRange.from,
+                checkboxRange.to
+            ) || selectionIntersectsRange(this.view.state.selection, checkboxRange.from, checkboxRange.to)
         );
     }
 
