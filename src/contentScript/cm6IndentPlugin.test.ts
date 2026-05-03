@@ -412,7 +412,7 @@ describe('wrappedLineIndentExtension', () => {
         view.destroy();
     });
 
-    it('clears exact line measurements but keeps fallback widths after document edits', () => {
+    it('preserves visible exact line measurements after same-prefix document edits', () => {
         const view = createView('  - first item');
         flushMeasureCycle(view);
         flushMeasureCycle(view);
@@ -428,8 +428,25 @@ describe('wrappedLineIndentExtension', () => {
             changes: { from: view.state.doc.line(1).to, insert: 'x' },
         });
 
-        expect(plugin.measuredLineWidths.size).toBe(0);
+        expect(plugin.measuredLineWidths.size).toBe(1);
         expect(plugin.fallbackPrefixWidths.size).toBe(1);
+
+        view.destroy();
+    });
+
+    it('prunes exact line measurements that are no longer visible', () => {
+        const view = createView('  - first item');
+        flushMeasureCycle(view);
+        flushMeasureCycle(view);
+
+        const plugin = view.plugin(wrappedLineIndentExtension) as unknown as {
+            measuredLineWidths: Map<string, number>;
+        };
+        plugin.measuredLineWidths.set('999:  - ', 40);
+
+        view.dispatch({ selection: { anchor: view.state.doc.line(1).to } });
+
+        expect([...plugin.measuredLineWidths.keys()]).toEqual(['0:  - ']);
 
         view.destroy();
     });

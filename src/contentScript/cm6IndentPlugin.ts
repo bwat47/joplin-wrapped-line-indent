@@ -292,10 +292,6 @@ class WrappedLineIndentPlugin implements PluginValue {
         }
 
         if (shouldRebuildDecorations) {
-            if (update.docChanged) {
-                this.measuredLineWidths.clear();
-            }
-
             if (update.geometryChanged) {
                 this.markLinePaddingStale();
             }
@@ -327,6 +323,7 @@ class WrappedLineIndentPlugin implements PluginValue {
     ): DecorationSet {
         const builder = new RangeSetBuilder<Decoration>();
         const state = this.view.state;
+        const visibleLineKeys = new Set<string>();
 
         this.pendingMeasurements.clear();
 
@@ -335,7 +332,10 @@ class WrappedLineIndentPlugin implements PluginValue {
 
             while (position <= range.to) {
                 const line = state.doc.lineAt(position);
-                this.addDecorationsForLine(builder, line, options);
+                const lineKey = this.addDecorationsForLine(builder, line, options);
+                if (lineKey) {
+                    visibleLineKeys.add(lineKey);
+                }
 
                 if (line.to >= range.to) {
                     break;
@@ -345,6 +345,7 @@ class WrappedLineIndentPlugin implements PluginValue {
             }
         }
 
+        this.pruneMeasuredLineWidths(visibleLineKeys);
         return builder.finish();
     }
 
@@ -352,10 +353,10 @@ class WrappedLineIndentPlugin implements PluginValue {
         builder: RangeSetBuilder<Decoration>,
         line: Line,
         options: BuildDecorationsOptions
-    ): void {
+    ): string | null {
         const prefix = parseIndentPrefix(line.text);
         if (!prefix) {
-            return;
+            return null;
         }
 
         const prefixTo = line.from + prefix.text.length;
@@ -363,7 +364,7 @@ class WrappedLineIndentPlugin implements PluginValue {
             intersectsFoldedRange(this.view.state, line.from, prefixTo) ||
             isInIndentExcludedSyntax(this.view.state, line.from, prefixTo)
         ) {
-            return;
+            return null;
         }
 
         const lineKey = getLineMeasurementKey(line, prefix);
@@ -387,6 +388,15 @@ class WrappedLineIndentPlugin implements PluginValue {
         }
 
         addTabReplacementDecorations(builder, line, prefix.text, this.view);
+        return lineKey;
+    }
+
+    private pruneMeasuredLineWidths(visibleLineKeys: Set<string>): void {
+        for (const lineKey of this.measuredLineWidths.keys()) {
+            if (!visibleLineKeys.has(lineKey)) {
+                this.measuredLineWidths.delete(lineKey);
+            }
+        }
     }
 
     private scheduleMeasure(): void {
