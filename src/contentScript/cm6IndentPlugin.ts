@@ -1,4 +1,4 @@
-import { foldedRanges, syntaxTree } from '@codemirror/language';
+import { foldedRanges, syntaxTree, syntaxTreeAvailable } from '@codemirror/language';
 import {
     RangeSetBuilder,
     StateEffect,
@@ -193,6 +193,10 @@ function isIndentExcludedNode(nodeName: string): boolean {
 }
 
 function isInIndentExcludedSyntax(state: EditorState, from: number, to: number): boolean {
+    if (!syntaxTreeAvailable(state, to)) {
+        return false;
+    }
+
     const tree = syntaxTree(state);
 
     for (const position of from === to ? [from] : [from, to]) {
@@ -310,7 +314,7 @@ class WrappedLineIndentPlugin implements PluginValue {
 
     private readonly cachedPrefixWidths = new Map<string, number>();
 
-    private readonly pendingMeasurements = new Map<string, MeasurementTarget>();
+    private readonly pendingMeasurements = new Map<string, MeasurementTarget[]>();
 
     private measureScheduled = false;
 
@@ -344,7 +348,8 @@ class WrappedLineIndentPlugin implements PluginValue {
         const viewportOrGeometryChanged = update.viewportChanged || update.geometryChanged;
         const externalRefreshTrigger =
             measurementsNeedRefresh || editorContentOrStateChanged || viewportOrGeometryChanged;
-        const shouldRebuildDecorations = externalRefreshTrigger || receivedMeasurementUpdate;
+        const syntaxTreeChanged = syntaxTree(update.startState) !== syntaxTree(update.state);
+        const shouldRebuildDecorations = externalRefreshTrigger || receivedMeasurementUpdate || syntaxTreeChanged;
 
         if (externalRefreshTrigger) {
             this.incompleteMeasurementRefreshSpent = false;
@@ -414,7 +419,12 @@ class WrappedLineIndentPlugin implements PluginValue {
         const cacheKey = getPrefixCacheKey(prefix, line, this.view.state);
         const cachedWidth = this.cachedPrefixWidths.get(cacheKey);
         if (cachedWidth === undefined) {
-            this.pendingMeasurements.set(cacheKey, { from: line.from, to: prefixTo });
+            const targets = this.pendingMeasurements.get(cacheKey);
+            if (targets) {
+                targets.push({ from: line.from, to: prefixTo });
+            } else {
+                this.pendingMeasurements.set(cacheKey, [{ from: line.from, to: prefixTo }]);
+            }
         }
 
         let decorationWidth = cachedWidth ?? this.getCachedWidthForPrefix(prefix.text);
@@ -450,7 +460,9 @@ class WrappedLineIndentPlugin implements PluginValue {
         }
 
         this.measureScheduled = true;
-        const targets = new Map(this.pendingMeasurements);
+        const targets = new Map(
+            [...this.pendingMeasurements].map(([cacheKey, targetList]) => [cacheKey, [...targetList]])
+        );
         const measuredDoc = this.view.state.doc;
         const measuredSelection = this.view.state.selection;
 
@@ -547,7 +559,7 @@ class WrappedLineIndentPlugin implements PluginValue {
 
     private measurePrefixes(
         view: EditorView,
-        targets: Map<string, MeasurementTarget>,
+        targets: Map<string, MeasurementTarget[]>,
         measuredDoc: Text,
         measuredSelection: EditorSelection,
         fallbackPaddingLeft: number
@@ -559,22 +571,32 @@ class WrappedLineIndentPlugin implements PluginValue {
         }
 
         let needsRetry = false;
-        for (const [cacheKey, target] of targets) {
-            const startCoords = view.coordsAtPos(target.from, 1);
-            const endCoords = view.coordsAtPos(target.to, -1);
+        for (const [cacheKey, targetList] of targets) {
+            let measuredWidth: number | null = null;
 
-            if (!startCoords || !endCoords) {
-                needsRetry = true;
+            for (const target of targetList) {
+                const startCoords = view.coordsAtPos(target.from, 1);
+                const endCoords = view.coordsAtPos(target.to, -1);
+
+                if (!startCoords || !endCoords) {
+                    needsRetry = true;
+                    continue;
+                }
+
+                const width = endCoords.left - startCoords.left;
+                if (width <= 0) {
+                    needsRetry = true;
+                    continue;
+                }
+
+                measuredWidth = measuredWidth === null ? width : Math.min(measuredWidth, width);
+            }
+
+            if (measuredWidth === null) {
                 continue;
             }
 
-            const width = endCoords.left - startCoords.left;
-            if (width <= 0) {
-                needsRetry = true;
-                continue;
-            }
-
-            measuredWidths.set(cacheKey, width);
+            measuredWidths.set(cacheKey, measuredWidth);
         }
 
         return { linePaddingLeft, isStale: false, needsRetry, widths: measuredWidths };
