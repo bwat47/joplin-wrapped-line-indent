@@ -632,49 +632,28 @@ describe('wrappedLineIndentExtension', () => {
 describe('parseIndentPrefix', () => {
     it('captures quoted list metadata', () => {
         expect(parseIndentPrefix('> - quoted item')).toEqual({
-            kind: 'quote-list',
             text: '> - ',
-            quoteDepth: 1,
-            checkboxOffset: null,
         });
         expect(parseIndentPrefix('> > 12. nested quoted item')).toEqual({
-            kind: 'quote-list',
             text: '> > 12. ',
-            quoteDepth: 2,
-            checkboxOffset: null,
         });
         expect(parseIndentPrefix('> * [x] quoted task')).toEqual({
-            kind: 'quote-list',
             text: '> * [x] ',
-            quoteDepth: 1,
-            checkboxOffset: 4,
         });
     });
 
     it('captures quote-only, list, and indentation metadata', () => {
         expect(parseIndentPrefix('> quoted text')).toEqual({
-            kind: 'quote',
             text: '> ',
-            quoteDepth: 1,
-            checkboxOffset: null,
         });
         expect(parseIndentPrefix('> > nested quoted text')).toEqual({
-            kind: 'quote',
             text: '> > ',
-            quoteDepth: 2,
-            checkboxOffset: null,
         });
         expect(parseIndentPrefix('- [ ] task item')).toEqual({
-            kind: 'list',
             text: '- [ ] ',
-            quoteDepth: 0,
-            checkboxOffset: 2,
         });
         expect(parseIndentPrefix('    indented paragraph')).toEqual({
-            kind: 'indent',
             text: '    ',
-            quoteDepth: 0,
-            checkboxOffset: null,
         });
     });
 

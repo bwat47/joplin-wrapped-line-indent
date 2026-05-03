@@ -33,17 +33,11 @@ interface MeasureReadResult {
     linePaddingLeft: number;
     isStale: boolean;
     needsRetry: boolean;
-    fallbackKeys: Map<string, string>;
     widths: Map<string, number>;
 }
 
-export type IndentPrefixKind = 'indent' | 'list' | 'quote' | 'quote-list';
-
 export interface ParsedIndentPrefix {
-    kind: IndentPrefixKind;
     text: string;
-    quoteDepth: number;
-    checkboxOffset: number | null;
 }
 
 type LinePaddingMeasurementStatus = 'unknown' | 'stale' | 'measured';
@@ -84,26 +78,13 @@ export function getTabReplacementWidth(textBeforeTab: string, tabSize: number, c
     return (tabSize - (column % tabSize)) * characterWidth;
 }
 
-interface ParsedListPrefix {
-    text: string;
-    checkboxOffset: number | null;
-}
-
-function parseListPrefix(lineText: string): ParsedListPrefix | null {
+function parseListPrefix(lineText: string): string | null {
     const text = LIST_PREFIX_PATTERN.exec(lineText)?.[1];
     if (!text) {
         return null;
     }
 
-    const checkboxIndex = text.search(TASK_LIST_CHECKBOX_PATTERN);
-    return {
-        text,
-        checkboxOffset: checkboxIndex >= 0 ? checkboxIndex : null,
-    };
-}
-
-function getQuoteDepth(prefixText: string): number {
-    return [...prefixText].filter((character) => character === '>').length;
+    return text;
 }
 
 /**
@@ -120,39 +101,26 @@ export function parseIndentPrefix(lineText: string): ParsedIndentPrefix | null {
         const listPrefix = parseListPrefix(lineText.slice(quotePrefix.length));
         if (listPrefix) {
             return {
-                kind: 'quote-list',
-                text: quotePrefix + listPrefix.text,
-                quoteDepth: getQuoteDepth(quotePrefix),
-                checkboxOffset:
-                    listPrefix.checkboxOffset === null ? null : quotePrefix.length + listPrefix.checkboxOffset,
+                text: quotePrefix + listPrefix,
             };
         }
 
         return {
-            kind: 'quote',
             text: quotePrefix,
-            quoteDepth: getQuoteDepth(quotePrefix),
-            checkboxOffset: null,
         };
     }
 
     const listPrefix = parseListPrefix(lineText);
     if (listPrefix) {
         return {
-            kind: 'list',
-            text: listPrefix.text,
-            quoteDepth: 0,
-            checkboxOffset: listPrefix.checkboxOffset,
+            text: listPrefix,
         };
     }
 
     const whitespaceMatch = /^([ \t]+)/.exec(lineText);
     if (whitespaceMatch?.[1]) {
         return {
-            kind: 'indent',
             text: whitespaceMatch[1],
-            quoteDepth: 0,
-            checkboxOffset: null,
         };
     }
 
@@ -467,7 +435,7 @@ class WrappedLineIndentPlugin implements PluginValue {
                         changed = true;
                     }
 
-                    const fallbackKey = result.fallbackKeys.get(lineKey);
+                    const fallbackKey = targets.get(lineKey)?.fallbackKey;
                     if (fallbackKey && this.fallbackPrefixWidths.get(fallbackKey) !== width) {
                         this.fallbackPrefixWidths.set(fallbackKey, width);
                         changed = true;
@@ -511,7 +479,6 @@ class WrappedLineIndentPlugin implements PluginValue {
             linePaddingLeft: this.linePadding.value,
             isStale: false,
             needsRetry: false,
-            fallbackKeys: new Map<string, string>(),
             widths: new Map<string, number>(),
         };
     }
@@ -539,10 +506,9 @@ class WrappedLineIndentPlugin implements PluginValue {
         fallbackPaddingLeft: number
     ): MeasureReadResult {
         const measuredWidths = new Map<string, number>();
-        const fallbackKeys = new Map<string, string>();
         const linePaddingLeft = getLinePaddingLeft(view, fallbackPaddingLeft);
         if (view.state.doc !== measuredDoc) {
-            return { linePaddingLeft, isStale: true, needsRetry: false, fallbackKeys, widths: measuredWidths };
+            return { linePaddingLeft, isStale: true, needsRetry: false, widths: measuredWidths };
         }
 
         let needsRetry = false;
@@ -562,10 +528,9 @@ class WrappedLineIndentPlugin implements PluginValue {
             }
 
             measuredWidths.set(lineKey, width);
-            fallbackKeys.set(lineKey, target.fallbackKey);
         }
 
-        return { linePaddingLeft, isStale: false, needsRetry, fallbackKeys, widths: measuredWidths };
+        return { linePaddingLeft, isStale: false, needsRetry, widths: measuredWidths };
     }
 }
 

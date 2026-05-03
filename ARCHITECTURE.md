@@ -14,7 +14,7 @@ This keeps the first visual line at the editor margin while wrapped visual lines
 ### 2. Prefix Detection and Decoration Lifecycle
 
 - **`buildDecorations`**: Scans only `view.visibleRanges`, parses each visible line with `parseIndentPrefix`, and decorates lines with prefixes.
-- **Prefix metadata**: `ParsedIndentPrefix` records the prefix kind, raw prefix text, quote depth, and task checkbox offset. It does not encode selection-derived render states.
+- **Prefix metadata**: `ParsedIndentPrefix` records only the raw prefix text needed for measurement. It does not encode selection-derived render states.
 - **Direct line keys**: Exact measurements are keyed by visible line position and prefix text via `getLineMeasurementKey`.
 - **Forced visible remeasurement**: Selection, focus, viewport, geometry, and measurement-signature changes pass an explicit `forceVisibleLineMeasurements` option through `buildDecorations` so visible lines are remeasured while their previous widths remain displayed.
 - **Exclusion logic**: Lines inside `CodeBlock`, `FencedCode`, `CodeInfo`, or `HorizontalRule` syntax nodes are skipped.
