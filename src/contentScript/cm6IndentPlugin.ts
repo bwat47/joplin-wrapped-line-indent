@@ -350,7 +350,9 @@ class WrappedLineIndentPlugin implements PluginValue {
         this.fallbackPrefixWidths.clear();
     }
 
-    private buildDecorations(options: BuildDecorationsOptions = { forceVisibleLineMeasurements: false }): DecorationSet {
+    private buildDecorations(
+        options: BuildDecorationsOptions = { forceVisibleLineMeasurements: false }
+    ): DecorationSet {
         const builder = new RangeSetBuilder<Decoration>();
         const state = this.view.state;
 
