@@ -43,14 +43,14 @@ The plugin treats tabs and spaces as physical layout objects:
 - **`fallbackPrefixWidths`**: Display-only fallback widths keyed by normalized prefix text. Task checkbox states (`[ ]`, `[x]`, `[X]`) share a fallback key so checkbox toggles can reuse a recent width while direct measurement catches up.
 - **Fallback order**: Decorations use exact line width first, then fallback prefix width, then `estimatePrefixWidth`.
 - **Measurement remains authoritative**: Fallback widths never suppress measurement. Missing exact line widths, or forced visible remeasurement, still queue `coordsAtPos` measurement.
-- **Invalidation**: `measuredLineWidths` is cleared on document changes to avoid stale line-position growth. `fallbackPrefixWidths` is kept across document, selection, focus, viewport, and geometry changes to reduce flicker, but is cleared when the measurement signature changes.
+- **Invalidation**: `measuredLineWidths` is preserved across rebuilds for still-visible lines whose line-start/prefix key still matches, and pruned once those keys are no longer visible. `fallbackPrefixWidths` is kept across document, selection, focus, viewport, and geometry changes to reduce flicker, but is cleared when the measurement signature changes.
 - **`measurementSignature`**: Tracks `defaultCharacterWidth`, `defaultLineHeight`, `scaleX`, `scaleY`, and `tabSize`. Changes indicate font, zoom, scale, or tab metrics may have invalidated pixel widths.
 
 ### 6. Reactivity
 
 The plugin rebuilds decorations and/or remeasures on:
 
-- `docChanged`: Content or prefixes changed; exact line measurements are cleared, fallback widths are retained.
+- `docChanged`: Content or prefixes changed; visible lines are rebuilt, matching visible exact measurements are reused, and stale non-visible line keys are pruned.
 - `selectionSet`: Joplin render-markup visibility may change; visible lines are remeasured without clearing displayed widths.
 - `focusChanged`: Editor render state may change; visible lines are remeasured.
 - `geometryChanged` / `viewportChanged`: Layout or visible ranges changed; visible lines are remeasured.
