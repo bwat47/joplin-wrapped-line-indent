@@ -24,6 +24,7 @@ interface CodeMirrorWrapper {
 }
 
 interface MeasurementTarget {
+    fallbackKey: string;
     from: number;
     to: number;
 }
@@ -32,6 +33,7 @@ interface MeasureReadResult {
     linePaddingLeft: number;
     isStale: boolean;
     needsRetry: boolean;
+    fallbackKeys: Map<string, string>;
     widths: Map<string, number>;
 }
 
@@ -259,6 +261,10 @@ function getLineMeasurementKey(line: Line, prefix: ParsedIndentPrefix): string {
     return `${line.from}:${prefix.text}`;
 }
 
+function getFallbackPrefixKey(prefixText: string): string {
+    return prefixText.replace(TASK_LIST_CHECKBOX_PATTERN, '[ ]');
+}
+
 function getMeasurementSignature(view: EditorView): string {
     return [view.defaultCharacterWidth, view.defaultLineHeight, view.scaleX, view.scaleY, view.state.tabSize].join(':');
 }
@@ -269,6 +275,8 @@ class WrappedLineIndentPlugin implements PluginValue {
     private destroyed = false;
 
     private readonly measuredLineWidths = new Map<string, number>();
+
+    private readonly fallbackPrefixWidths = new Map<string, number>();
 
     private readonly pendingMeasurements = new Map<string, MeasurementTarget>();
 
@@ -295,6 +303,7 @@ class WrappedLineIndentPlugin implements PluginValue {
         const measurementsNeedRefresh = nextMeasurementSignature !== this.measurementSignature;
         if (measurementsNeedRefresh) {
             this.measurementSignature = nextMeasurementSignature;
+            this.fallbackPrefixWidths.clear();
             this.markLinePaddingStale();
         }
 
@@ -336,6 +345,7 @@ class WrappedLineIndentPlugin implements PluginValue {
 
         this.pendingMeasurements.clear();
         this.measuredLineWidths.clear();
+        this.fallbackPrefixWidths.clear();
     }
 
     private buildDecorations(): DecorationSet {
@@ -379,10 +389,15 @@ class WrappedLineIndentPlugin implements PluginValue {
         const lineKey = getLineMeasurementKey(line, prefix);
         const measuredWidth = this.measuredLineWidths.get(lineKey);
         if (measuredWidth === undefined || this.forceVisibleLineMeasurements) {
-            this.pendingMeasurements.set(lineKey, { from: line.from, to: prefixTo });
+            this.pendingMeasurements.set(lineKey, {
+                fallbackKey: getFallbackPrefixKey(prefix.text),
+                from: line.from,
+                to: prefixTo,
+            });
         }
 
-        let decorationWidth = measuredWidth;
+        const fallbackWidth = this.fallbackPrefixWidths.get(getFallbackPrefixKey(prefix.text));
+        let decorationWidth = measuredWidth ?? fallbackWidth;
         if (decorationWidth === undefined && this.canUseEstimatedPrefixWidth()) {
             decorationWidth = estimatePrefixWidth(prefix.text, this.view);
         }
@@ -439,6 +454,12 @@ class WrappedLineIndentPlugin implements PluginValue {
                         this.measuredLineWidths.set(lineKey, width);
                         changed = true;
                     }
+
+                    const fallbackKey = result.fallbackKeys.get(lineKey);
+                    if (fallbackKey && this.fallbackPrefixWidths.get(fallbackKey) !== width) {
+                        this.fallbackPrefixWidths.set(fallbackKey, width);
+                        changed = true;
+                    }
                 }
 
                 const shouldRefreshForIncompleteMeasurement =
@@ -478,6 +499,7 @@ class WrappedLineIndentPlugin implements PluginValue {
             linePaddingLeft: this.linePadding.value,
             isStale: false,
             needsRetry: false,
+            fallbackKeys: new Map<string, string>(),
             widths: new Map<string, number>(),
         };
     }
@@ -505,9 +527,10 @@ class WrappedLineIndentPlugin implements PluginValue {
         fallbackPaddingLeft: number
     ): MeasureReadResult {
         const measuredWidths = new Map<string, number>();
+        const fallbackKeys = new Map<string, string>();
         const linePaddingLeft = getLinePaddingLeft(view, fallbackPaddingLeft);
         if (view.state.doc !== measuredDoc) {
-            return { linePaddingLeft, isStale: true, needsRetry: false, widths: measuredWidths };
+            return { linePaddingLeft, isStale: true, needsRetry: false, fallbackKeys, widths: measuredWidths };
         }
 
         let needsRetry = false;
@@ -527,9 +550,10 @@ class WrappedLineIndentPlugin implements PluginValue {
             }
 
             measuredWidths.set(lineKey, width);
+            fallbackKeys.set(lineKey, target.fallbackKey);
         }
 
-        return { linePaddingLeft, isStale: false, needsRetry, widths: measuredWidths };
+        return { linePaddingLeft, isStale: false, needsRetry, fallbackKeys, widths: measuredWidths };
     }
 }
 
