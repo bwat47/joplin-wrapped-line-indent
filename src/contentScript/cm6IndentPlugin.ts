@@ -53,6 +53,10 @@ interface LinePaddingMeasurement {
     value: number;
 }
 
+interface BuildDecorationsOptions {
+    forceVisibleLineMeasurements: boolean;
+}
+
 class TabWidget extends WidgetType {
     public constructor(private readonly width: number) {
         super();
@@ -288,8 +292,6 @@ class WrappedLineIndentPlugin implements PluginValue {
 
     private refreshFrame: number | null = null;
 
-    private forceVisibleLineMeasurements = false;
-
     private linePadding: LinePaddingMeasurement = { status: 'unknown', value: 0 };
 
     public constructor(private readonly view: EditorView) {
@@ -326,10 +328,10 @@ class WrappedLineIndentPlugin implements PluginValue {
                 this.markLinePaddingStale();
             }
 
-            this.forceVisibleLineMeasurements =
-                measurementsNeedRefresh || update.selectionSet || update.focusChanged || viewportOrGeometryChanged;
-            this.decorations = this.buildDecorations();
-            this.forceVisibleLineMeasurements = false;
+            this.decorations = this.buildDecorations({
+                forceVisibleLineMeasurements:
+                    measurementsNeedRefresh || update.selectionSet || update.focusChanged || viewportOrGeometryChanged,
+            });
             this.scheduleMeasure();
         }
     }
@@ -348,7 +350,7 @@ class WrappedLineIndentPlugin implements PluginValue {
         this.fallbackPrefixWidths.clear();
     }
 
-    private buildDecorations(): DecorationSet {
+    private buildDecorations(options: BuildDecorationsOptions = { forceVisibleLineMeasurements: false }): DecorationSet {
         const builder = new RangeSetBuilder<Decoration>();
         const state = this.view.state;
 
@@ -359,7 +361,7 @@ class WrappedLineIndentPlugin implements PluginValue {
 
             while (position <= range.to) {
                 const line = state.doc.lineAt(position);
-                this.addDecorationsForLine(builder, line);
+                this.addDecorationsForLine(builder, line, options);
 
                 if (line.to >= range.to) {
                     break;
@@ -372,7 +374,11 @@ class WrappedLineIndentPlugin implements PluginValue {
         return builder.finish();
     }
 
-    private addDecorationsForLine(builder: RangeSetBuilder<Decoration>, line: Line): void {
+    private addDecorationsForLine(
+        builder: RangeSetBuilder<Decoration>,
+        line: Line,
+        options: BuildDecorationsOptions
+    ): void {
         const prefix = parseIndentPrefix(line.text);
         if (!prefix) {
             return;
@@ -388,7 +394,7 @@ class WrappedLineIndentPlugin implements PluginValue {
 
         const lineKey = getLineMeasurementKey(line, prefix);
         const measuredWidth = this.measuredLineWidths.get(lineKey);
-        if (measuredWidth === undefined || this.forceVisibleLineMeasurements) {
+        if (measuredWidth === undefined || options.forceVisibleLineMeasurements) {
             this.pendingMeasurements.set(lineKey, {
                 fallbackKey: getFallbackPrefixKey(prefix.text),
                 from: line.from,
