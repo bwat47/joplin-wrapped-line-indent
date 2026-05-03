@@ -44,6 +44,8 @@ interface MeasureReadResult {
     widths: Map<string, number>;
 }
 
+type CollapsedMeasuredWidth = { needsRetry: true } | { needsRetry: false; width: number };
+
 export type IndentPrefixKind = 'indent' | 'list' | 'quote' | 'quote-list';
 
 export interface ParsedIndentPrefix {
@@ -312,18 +314,18 @@ function getMeasurementSignature(view: EditorView): string {
     return [view.defaultCharacterWidth, view.defaultLineHeight, view.scaleX, view.scaleY, view.state.tabSize].join(':');
 }
 
-function collapseMeasuredWidth(cacheKey: string, widths: number[]): { width: number | null; needsRetry: boolean } {
+function collapseMeasuredWidth(cacheKey: string, widths: number[]): CollapsedMeasuredWidth {
     const measuredWidth = Math.min(...widths);
     if (!cacheKey.includes('task:') || widths.length < 2) {
-        return { width: measuredWidth, needsRetry: false };
+        return { needsRetry: false, width: measuredWidth };
     }
 
     const widestWidth = Math.max(...widths);
     if (widestWidth - measuredWidth > TASK_WIDTH_SPREAD_TOLERANCE_PX) {
-        return { width: null, needsRetry: true };
+        return { needsRetry: true };
     }
 
-    return { width: measuredWidth, needsRetry: false };
+    return { needsRetry: false, width: measuredWidth };
 }
 
 class WrappedLineIndentPlugin implements PluginValue {
@@ -653,10 +655,6 @@ class WrappedLineIndentPlugin implements PluginValue {
             const collapsedWidth = collapseMeasuredWidth(cacheKey, widths);
             if (collapsedWidth.needsRetry) {
                 needsRetry = true;
-                continue;
-            }
-
-            if (collapsedWidth.width === null) {
                 continue;
             }
 
