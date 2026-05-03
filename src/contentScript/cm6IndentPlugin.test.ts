@@ -1,12 +1,14 @@
 import { markdown } from '@codemirror/lang-markdown';
 import { forceParsing } from '@codemirror/language';
 import { Compartment, EditorState } from '@codemirror/state';
-import type { Extension } from '@codemirror/state';
+import type { ChangeSpec, Extension } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
+import type { CodeMirrorControl } from 'api/types';
 
 import {
     default as createContentScript,
     getLineDecorationStyle,
+    isFullDocumentReplace,
     parseIndentPrefix,
     getTabReplacementWidth,
     isBlockCodeNode,
@@ -61,12 +63,24 @@ describe('wrappedLineIndentExtension', () => {
 
     it('registers the legacy task-list checkbox theme with the plugin', () => {
         const extensionGroups: unknown[] = [];
-        createContentScript().plugin({
+        const codeMirrorWrapper: CodeMirrorControl = {
             cm6: {} as EditorView,
             addExtension: (extension) => {
                 extensionGroups.push(extension);
             },
-        });
+            editor: {},
+            supportsCommand: jest.fn(),
+            execCommand: jest.fn(),
+            registerCommand: jest.fn(),
+            joplinExtensions: {
+                completionSource: jest.fn(),
+                enableLanguageDataAutocomplete: { of: jest.fn() },
+                noteIdFacet: {},
+                setNoteIdEffect: {},
+            },
+        };
+
+        createContentScript().plugin(codeMirrorWrapper);
 
         expect(extensionGroups).toHaveLength(1);
         expect(extensionGroups[0]).toEqual(
@@ -201,9 +215,10 @@ describe('wrappedLineIndentExtension', () => {
 
     it('keeps block quote lines decorated while remeasuring a new selection state', () => {
         const view = createView('> - first quoted item');
+        let measuredPrefixWidth = 16;
         coordsAtPosSpy.mockImplementation((position) => {
             const line = view.state.doc.lineAt(position);
-            const left = position <= line.from + 1 ? 0 : 16;
+            const left = position <= line.from + 1 ? 0 : measuredPrefixWidth;
             return { left, right: left, top: 0, bottom: 16 };
         });
 
@@ -215,9 +230,38 @@ describe('wrappedLineIndentExtension', () => {
 
         expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('26px');
 
+        measuredPrefixWidth = 28;
         flushMeasureCycle(view);
         flushMeasureCycle(view);
-        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('26px');
+        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('38px');
+
+        view.destroy();
+    });
+
+    it('applies the latest block quote selection state when selection changes again before measurement runs', () => {
+        const view = createView('> - first quoted item\n> - second quoted item');
+        coordsAtPosSpy.mockImplementation((position) => {
+            const line = view.state.doc.lineAt(position);
+            const hasSelectionOnLine = view.state.selection.ranges.some(
+                (range) => range.from <= line.to && range.to >= line.from
+            );
+            const characterWidth = hasSelectionOnLine ? 8 : 4;
+            const left = position <= line.from + 1 ? 0 : 4 * characterWidth;
+            return { left, right: left, top: 0, bottom: 16 };
+        });
+
+        flushMeasureCycle(view);
+        flushMeasureCycle(view);
+
+        view.dispatch({ selection: { anchor: view.state.doc.line(1).from, head: view.state.doc.line(2).to } });
+        view.dispatch({ selection: { anchor: view.state.doc.line(2).to } });
+
+        flushMeasureCycle(view);
+        flushMeasureCycle(view);
+
+        expect(
+            [...view.dom.querySelectorAll<HTMLElement>('.cm-wrapped-line-indent')].map((line) => line.style.paddingLeft)
+        ).toEqual(['26px', '42px']);
 
         view.destroy();
     });
@@ -274,7 +318,7 @@ describe('wrappedLineIndentExtension', () => {
         flushMeasureCycle(view);
         flushMeasureCycle(view);
 
-        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('34px');
+        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('30px');
 
         view.destroy();
     });
@@ -321,38 +365,76 @@ describe('wrappedLineIndentExtension', () => {
         view.destroy();
     });
 
-    it('remeasures a visible rendered task line even when that cache key already exists', () => {
-        const view = createView('- [ ] first task');
+    it('uses task fallback width immediately after toggling checkbox markup', () => {
+        const view = createView('  - [ ] first task');
         coordsAtPosSpy.mockImplementation((position) => {
             const line = view.state.doc.lineAt(position);
-            const checkboxFrom = line.from + '- '.length;
-            const checkboxTo = checkboxFrom + '[ ]'.length;
-            const cursor = view.state.selection.main.head;
-            const revealsCheckboxMarkup = cursor >= checkboxFrom && cursor <= checkboxTo;
-            const prefixWidth = revealsCheckboxMarkup ? 56 : 40;
+            const prefixWidth = line.text.startsWith('  - [x] ') ? 56 : 32;
             const left = position <= line.from + 1 ? 0 : prefixWidth;
             return { left, right: left, top: 0, bottom: 16 };
         });
 
         flushMeasureCycle(view);
         flushMeasureCycle(view);
-        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('50px');
+        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('42px');
 
-        const plugin = view.plugin(wrappedLineIndentExtension) as unknown as {
-            cachedPrefixWidths: Map<string, number>;
-        };
-        plugin.cachedPrefixWidths.set('task:rendered:- [ ] ', 16);
+        view.dispatch({
+            changes: {
+                from: view.state.doc.line(1).from + '  - ['.length,
+                to: view.state.doc.line(1).from + '  - [ ]'.length,
+                insert: 'x]',
+            },
+        });
 
-        view.dispatch({ selection: { anchor: view.state.doc.line(1).from + '- ['.length } });
+        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('42px');
+
         flushMeasureCycle(view);
         flushMeasureCycle(view);
         expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('66px');
 
-        view.dispatch({ selection: { anchor: view.state.doc.line(1).to } });
+        view.destroy();
+    });
+
+    it('keeps direct task measurements isolated per visible line', () => {
+        const view = createView('- [ ] first task\n- [ ] second task');
+        coordsAtPosSpy.mockImplementation((position) => {
+            const line = view.state.doc.lineAt(position);
+            const prefixWidth = line.number === 1 ? 40 : 24;
+            const left = position <= line.from + 1 ? 0 : prefixWidth;
+            return { left, right: left, top: 0, bottom: 16 };
+        });
+
         flushMeasureCycle(view);
         flushMeasureCycle(view);
 
-        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('50px');
+        expect(
+            [...view.dom.querySelectorAll<HTMLElement>('.cm-wrapped-line-indent')].map((line) => line.style.paddingLeft)
+        ).toEqual(['50px', '34px']);
+
+        view.destroy();
+    });
+
+    it('uses fallback prefix width for a newly introduced matching prefix', () => {
+        const view = createView('  - first item\nplain text');
+        coordsAtPosSpy.mockImplementation((position) => {
+            const line = view.state.doc.lineAt(position);
+            const left = position <= line.from + 1 ? 0 : 40;
+            return { left, right: left, top: 0, bottom: 16 };
+        });
+
+        flushMeasureCycle(view);
+        flushMeasureCycle(view);
+
+        view.dispatch({
+            changes: {
+                from: view.state.doc.line(2).from,
+                insert: '  - ',
+            },
+        });
+
+        expect(
+            [...view.dom.querySelectorAll<HTMLElement>('.cm-wrapped-line-indent')].map((line) => line.style.paddingLeft)
+        ).toEqual(['50px', '50px']);
 
         view.destroy();
     });
@@ -372,6 +454,71 @@ describe('wrappedLineIndentExtension', () => {
         view.destroy();
     });
 
+    it('preserves visible exact line measurements after same-prefix document edits', () => {
+        const view = createView('  - first item');
+        flushMeasureCycle(view);
+        flushMeasureCycle(view);
+
+        const plugin = view.plugin(wrappedLineIndentExtension) as unknown as {
+            fallbackPrefixWidths: Map<string, number>;
+            measuredLineWidths: Map<string, number>;
+        };
+        expect(plugin.measuredLineWidths.size).toBe(1);
+        expect(plugin.fallbackPrefixWidths.size).toBe(1);
+
+        view.dispatch({
+            changes: { from: view.state.doc.line(1).to, insert: 'x' },
+        });
+
+        expect(plugin.measuredLineWidths.size).toBe(1);
+        expect(plugin.fallbackPrefixWidths.size).toBe(1);
+
+        view.destroy();
+    });
+
+    it('clears cached measurements after a full document replacement', () => {
+        const view = createView('  - first item');
+        flushMeasureCycle(view);
+        flushMeasureCycle(view);
+
+        const plugin = view.plugin(wrappedLineIndentExtension) as unknown as {
+            fallbackPrefixWidths: Map<string, number>;
+            measuredLineWidths: Map<string, number>;
+        };
+        expect(plugin.measuredLineWidths.size).toBe(1);
+        expect(plugin.fallbackPrefixWidths.size).toBe(1);
+
+        view.dispatch({
+            changes: { from: 0, to: view.state.doc.length, insert: '  - replacement item' },
+        });
+
+        expect(plugin.measuredLineWidths.size).toBe(0);
+        expect(plugin.fallbackPrefixWidths.size).toBe(0);
+
+        flushMeasureCycle(view);
+        expect(plugin.measuredLineWidths.size).toBe(1);
+        expect(plugin.fallbackPrefixWidths.size).toBe(1);
+
+        view.destroy();
+    });
+
+    it('prunes exact line measurements that are no longer visible', () => {
+        const view = createView('  - first item');
+        flushMeasureCycle(view);
+        flushMeasureCycle(view);
+
+        const plugin = view.plugin(wrappedLineIndentExtension) as unknown as {
+            measuredLineWidths: Map<string, number>;
+        };
+        plugin.measuredLineWidths.set('999:  - ', 40);
+
+        view.dispatch({ selection: { anchor: view.state.doc.line(1).to } });
+
+        expect([...plugin.measuredLineWidths.keys()]).toEqual(['0:  - ']);
+
+        view.destroy();
+    });
+
     it('keeps list lines decorated immediately after indenting to an unmeasured prefix', () => {
         const view = createView('- item');
         flushMeasureCycle(view);
@@ -385,7 +532,7 @@ describe('wrappedLineIndentExtension', () => {
         view.destroy();
     });
 
-    it('measures another visible line when one occurrence of the same prefix is temporarily unavailable', () => {
+    it('uses a fallback estimate when one visible line is temporarily unavailable', () => {
         const view = createView('  - first item\n  - second item');
         const secondLine = view.state.doc.line(2);
 
@@ -409,7 +556,7 @@ describe('wrappedLineIndentExtension', () => {
         view.destroy();
     });
 
-    it('retries rendered task measurements when equivalent prefixes initially disagree', () => {
+    it('keeps different direct task measurements instead of collapsing equivalent prefixes', () => {
         const view = createView('  - [ ] first task\n  - [ ] second task');
         let renderedMeasurementsDisagree = true;
 
@@ -430,7 +577,7 @@ describe('wrappedLineIndentExtension', () => {
         flushMeasureCycle(view);
         expect(
             [...view.dom.querySelectorAll<HTMLElement>('.cm-wrapped-line-indent')].map((line) => line.style.paddingLeft)
-        ).toEqual(['66px', '66px']);
+        ).toEqual(['66px', '42px']);
 
         view.destroy();
     });
@@ -480,6 +627,46 @@ describe('wrappedLineIndentExtension', () => {
         expect(dispatchSpy).toHaveBeenCalledTimes(2);
 
         dispatchSpy.mockRestore();
+        view.destroy();
+    });
+
+    it('converges to the latest selection state before a deferred follow-up refresh settles', () => {
+        const view = createView('> - first quoted item\n> - second quoted item');
+        let measurementAvailable = true;
+
+        coordsAtPosSpy.mockImplementation((position) => {
+            if (!measurementAvailable) {
+                return null;
+            }
+
+            const line = view.state.doc.lineAt(position);
+            const hasSelectionOnLine = view.state.selection.ranges.some(
+                (range) => range.from <= line.to && range.to >= line.from
+            );
+            const characterWidth = hasSelectionOnLine ? 8 : 4;
+            const left = position <= line.from + 1 ? 0 : 4 * characterWidth;
+            return { left, right: left, top: 0, bottom: 16 };
+        });
+
+        flushMeasureCycle(view);
+        flushMeasureCycle(view);
+
+        measurementAvailable = false;
+        view.dispatch({ selection: { anchor: view.state.doc.line(1).from, head: view.state.doc.line(2).to } });
+
+        (view as MeasurableEditorView).measure(false);
+
+        view.dispatch({ selection: { anchor: view.state.doc.line(2).to } });
+        measurementAvailable = true;
+
+        flushAnimationFrames();
+        flushMeasureCycle(view);
+        flushMeasureCycle(view);
+
+        expect(
+            [...view.dom.querySelectorAll<HTMLElement>('.cm-wrapped-line-indent')].map((line) => line.style.paddingLeft)
+        ).toEqual(['26px', '42px']);
+
         view.destroy();
     });
 
@@ -567,59 +754,72 @@ describe('wrappedLineIndentExtension', () => {
     });
 });
 
+describe('isFullDocumentReplace', () => {
+    const createTransaction = (doc: string, changes?: ChangeSpec) => {
+        const state = EditorState.create({ doc });
+        return state.update({ changes });
+    };
+
+    it('detects a single change replacing the whole previous document', () => {
+        const transaction = createTransaction('old note', {
+            from: 0,
+            to: 'old note'.length,
+            insert: 'new note',
+        });
+
+        expect(isFullDocumentReplace(transaction)).toBe(true);
+    });
+
+    it('ignores partial edits', () => {
+        const transaction = createTransaction('old note', {
+            from: 'old'.length,
+            insert: 'er',
+        });
+
+        expect(isFullDocumentReplace(transaction)).toBe(false);
+    });
+
+    it('ignores multiple changes even when they cover the document overall', () => {
+        const transaction = createTransaction('old note', [
+            { from: 0, to: 3, insert: 'new' },
+            { from: 4, to: 8, insert: 'text' },
+        ]);
+
+        expect(isFullDocumentReplace(transaction)).toBe(false);
+    });
+
+    it('ignores transactions without document changes', () => {
+        const transaction = createTransaction('old note');
+
+        expect(isFullDocumentReplace(transaction)).toBe(false);
+    });
+});
+
 describe('parseIndentPrefix', () => {
     it('captures quoted list metadata', () => {
         expect(parseIndentPrefix('> - quoted item')).toEqual({
-            kind: 'quote-list',
             text: '> - ',
-            quoteDepth: 1,
-            checkboxOffset: null,
-            visibilitySensitive: true,
         });
         expect(parseIndentPrefix('> > 12. nested quoted item')).toEqual({
-            kind: 'quote-list',
             text: '> > 12. ',
-            quoteDepth: 2,
-            checkboxOffset: null,
-            visibilitySensitive: true,
         });
         expect(parseIndentPrefix('> * [x] quoted task')).toEqual({
-            kind: 'quote-list',
             text: '> * [x] ',
-            quoteDepth: 1,
-            checkboxOffset: 4,
-            visibilitySensitive: true,
         });
     });
 
     it('captures quote-only, list, and indentation metadata', () => {
         expect(parseIndentPrefix('> quoted text')).toEqual({
-            kind: 'quote',
             text: '> ',
-            quoteDepth: 1,
-            checkboxOffset: null,
-            visibilitySensitive: true,
         });
         expect(parseIndentPrefix('> > nested quoted text')).toEqual({
-            kind: 'quote',
             text: '> > ',
-            quoteDepth: 2,
-            checkboxOffset: null,
-            visibilitySensitive: true,
         });
         expect(parseIndentPrefix('- [ ] task item')).toEqual({
-            kind: 'list',
             text: '- [ ] ',
-            quoteDepth: 0,
-            checkboxOffset: 2,
-            visibilitySensitive: true,
         });
         expect(parseIndentPrefix('    indented paragraph')).toEqual({
-            kind: 'indent',
             text: '    ',
-            quoteDepth: 0,
-            checkboxOffset: null,
-            visibilitySensitive: false,
         });
     });
 

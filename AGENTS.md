@@ -1,6 +1,6 @@
 ## Project architecture overview
 
-ARCHITECTURE.md
+docs/ARCHITECTURE.md
 
 ## Build, Test, and Development Commands
 

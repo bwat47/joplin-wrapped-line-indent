@@ -3,10 +3,10 @@ import {
     RangeSetBuilder,
     StateEffect,
     countColumn,
-    type EditorSelection,
     type EditorState,
     type Line,
     type Text,
+    type Transaction,
 } from '@codemirror/state';
 import {
     Decoration,
@@ -18,21 +18,17 @@ import {
     WidgetType,
 } from '@codemirror/view';
 import type { SyntaxNode } from '@lezer/common';
+import type { CodeMirrorControl } from 'api/types';
 
 const WRAPPED_LINE_CLASS = 'cm-wrapped-line-indent';
 const TASK_LIST_CHECKBOX_PATTERN = /\[[ xX]\]/;
 const LEGACY_TASK_MARKER_SELECTOR = '.cm-ext-checkbox-toggle.cm-taskMarker';
 const LIST_PREFIX_PATTERN = /^([ \t]*(?:[-*+]|\d+[.)])[ \t]+(?:\[[ xX]\][ \t]+)?)/;
-const TASK_WIDTH_SPREAD_TOLERANCE_PX = 1;
 
 const measurementsChanged = StateEffect.define<void>();
 
-interface CodeMirrorWrapper {
-    cm6?: EditorView;
-    addExtension(extension: unknown): void;
-}
-
 interface MeasurementTarget {
+    fallbackKey: string;
     from: number;
     to: number;
 }
@@ -44,16 +40,8 @@ interface MeasureReadResult {
     widths: Map<string, number>;
 }
 
-type CollapsedMeasuredWidth = { needsRetry: true } | { needsRetry: false; width: number };
-
-export type IndentPrefixKind = 'indent' | 'list' | 'quote' | 'quote-list';
-
 export interface ParsedIndentPrefix {
-    kind: IndentPrefixKind;
     text: string;
-    quoteDepth: number;
-    checkboxOffset: number | null;
-    visibilitySensitive: boolean;
 }
 
 type LinePaddingMeasurementStatus = 'unknown' | 'stale' | 'measured';
@@ -63,9 +51,8 @@ interface LinePaddingMeasurement {
     value: number;
 }
 
-interface TaskMeasurementContext {
-    confirmVisibleMeasurements: boolean;
-    selectionBeforeUpdate: EditorSelection | null;
+interface BuildDecorationsOptions {
+    forceVisibleLineMeasurements: boolean;
 }
 
 class TabWidget extends WidgetType {
@@ -95,26 +82,13 @@ export function getTabReplacementWidth(textBeforeTab: string, tabSize: number, c
     return (tabSize - (column % tabSize)) * characterWidth;
 }
 
-interface ParsedListPrefix {
-    text: string;
-    checkboxOffset: number | null;
-}
-
-function parseListPrefix(lineText: string): ParsedListPrefix | null {
+function parseListPrefix(lineText: string): string | null {
     const text = LIST_PREFIX_PATTERN.exec(lineText)?.[1];
     if (!text) {
         return null;
     }
 
-    const checkboxIndex = text.search(TASK_LIST_CHECKBOX_PATTERN);
-    return {
-        text,
-        checkboxOffset: checkboxIndex >= 0 ? checkboxIndex : null,
-    };
-}
-
-function getQuoteDepth(prefixText: string): number {
-    return [...prefixText].filter((character) => character === '>').length;
+    return text;
 }
 
 /**
@@ -131,43 +105,26 @@ export function parseIndentPrefix(lineText: string): ParsedIndentPrefix | null {
         const listPrefix = parseListPrefix(lineText.slice(quotePrefix.length));
         if (listPrefix) {
             return {
-                kind: 'quote-list',
-                text: quotePrefix + listPrefix.text,
-                quoteDepth: getQuoteDepth(quotePrefix),
-                checkboxOffset:
-                    listPrefix.checkboxOffset === null ? null : quotePrefix.length + listPrefix.checkboxOffset,
-                visibilitySensitive: true,
+                text: quotePrefix + listPrefix,
             };
         }
 
         return {
-            kind: 'quote',
             text: quotePrefix,
-            quoteDepth: getQuoteDepth(quotePrefix),
-            checkboxOffset: null,
-            visibilitySensitive: true,
         };
     }
 
     const listPrefix = parseListPrefix(lineText);
     if (listPrefix) {
         return {
-            kind: 'list',
-            text: listPrefix.text,
-            quoteDepth: 0,
-            checkboxOffset: listPrefix.checkboxOffset,
-            visibilitySensitive: listPrefix.checkboxOffset !== null,
+            text: listPrefix,
         };
     }
 
     const whitespaceMatch = /^([ \t]+)/.exec(lineText);
     if (whitespaceMatch?.[1]) {
         return {
-            kind: 'indent',
             text: whitespaceMatch[1],
-            quoteDepth: 0,
-            checkboxOffset: null,
-            visibilitySensitive: false,
         };
     }
 
@@ -276,61 +233,42 @@ function createLineDecoration(width: number, linePaddingLeft: number): Decoratio
     });
 }
 
-function selectionIntersectsRange(selection: EditorSelection, from: number, to: number): boolean {
-    return selection.ranges.some((range) => range.from <= to && range.to >= from);
+function getLineMeasurementKey(line: Line, prefix: ParsedIndentPrefix): string {
+    return `${line.from}:${prefix.text}`;
 }
 
-function hasSelectionInRange(state: EditorState, from: number, to: number): boolean {
-    return selectionIntersectsRange(state.selection, from, to);
-}
-
-function getTaskListCheckboxRange(prefix: ParsedIndentPrefix, line: Line): MeasurementTarget | null {
-    if (prefix.checkboxOffset === null) {
-        return null;
-    }
-
-    return {
-        from: line.from + prefix.checkboxOffset,
-        to: line.from + prefix.checkboxOffset + '[ ]'.length,
-    };
-}
-
-function getPrefixCacheKey(prefix: ParsedIndentPrefix, line: Line, state: EditorState): string {
-    if (!prefix.visibilitySensitive) {
-        return prefix.text;
-    }
-
-    const states: string[] = [];
-    if (prefix.quoteDepth > 0) {
-        states.push(`quote:${hasSelectionInRange(state, line.from, line.to) ? 'selected' : 'unselected'}`);
-    }
-
-    if (prefix.checkboxOffset !== null) {
-        const checkboxRange = getTaskListCheckboxRange(prefix, line);
-        const checkboxVisibilityState =
-            checkboxRange && hasSelectionInRange(state, checkboxRange.from, checkboxRange.to) ? 'revealed' : 'rendered';
-        states.push(`task:${checkboxVisibilityState}`);
-    }
-
-    return `${states.join(':')}:${prefix.text}`;
+function getFallbackPrefixKey(prefixText: string): string {
+    return prefixText.replace(TASK_LIST_CHECKBOX_PATTERN, '[ ]');
 }
 
 function getMeasurementSignature(view: EditorView): string {
     return [view.defaultCharacterWidth, view.defaultLineHeight, view.scaleX, view.scaleY, view.state.tabSize].join(':');
 }
 
-function collapseMeasuredWidth(cacheKey: string, widths: number[]): CollapsedMeasuredWidth {
-    const measuredWidth = Math.min(...widths);
-    if (!cacheKey.includes('task:') || widths.length < 2) {
-        return { needsRetry: false, width: measuredWidth };
+/**
+ * Detects a transaction that replaces the whole document in one change.
+ *
+ * Examples:
+ * - Note switches or sync refreshes: replace `[0, previousDoc.length]`
+ * - Ordinary edits: insert/delete only part of the previous document
+ */
+export function isFullDocumentReplace(transaction: Transaction): boolean {
+    if (!transaction.docChanged) {
+        return false;
     }
 
-    const widestWidth = Math.max(...widths);
-    if (widestWidth - measuredWidth > TASK_WIDTH_SPREAD_TOLERANCE_PX) {
-        return { needsRetry: true };
-    }
+    const docLength = transaction.startState.doc.length;
+    let changeCount = 0;
+    let replacedWholeDocument = false;
 
-    return { needsRetry: false, width: measuredWidth };
+    transaction.changes.iterChanges((fromA, toA) => {
+        changeCount++;
+        if (changeCount === 1 && fromA === 0 && toA === docLength) {
+            replacedWholeDocument = true;
+        }
+    });
+
+    return replacedWholeDocument && changeCount === 1;
 }
 
 class WrappedLineIndentPlugin implements PluginValue {
@@ -338,20 +276,18 @@ class WrappedLineIndentPlugin implements PluginValue {
 
     private destroyed = false;
 
-    private readonly cachedPrefixWidths = new Map<string, number>();
+    private readonly measuredLineWidths = new Map<string, number>();
 
-    private readonly pendingMeasurements = new Map<string, MeasurementTarget[]>();
+    private readonly fallbackPrefixWidths = new Map<string, number>();
+
+    private readonly pendingMeasurements = new Map<string, MeasurementTarget>();
 
     private measureScheduled = false;
 
     private measurementSignature: string;
 
+    // Allows one extra refresh when coordinates are temporarily unavailable, without looping forever.
     private incompleteMeasurementRefreshSpent = false;
-
-    private taskMeasurementContext: TaskMeasurementContext = {
-        confirmVisibleMeasurements: false,
-        selectionBeforeUpdate: null,
-    };
 
     private refreshFrame: number | null = null;
 
@@ -364,12 +300,17 @@ class WrappedLineIndentPlugin implements PluginValue {
     }
 
     public update(update: ViewUpdate): void {
+        const fullDocumentReplaced = update.transactions.some(isFullDocumentReplace);
         const nextMeasurementSignature = getMeasurementSignature(this.view);
         const measurementsNeedRefresh = nextMeasurementSignature !== this.measurementSignature;
         if (measurementsNeedRefresh) {
             this.measurementSignature = nextMeasurementSignature;
-            this.cachedPrefixWidths.clear();
+            this.fallbackPrefixWidths.clear();
             this.markLinePaddingStale();
+        }
+
+        if (fullDocumentReplaced) {
+            this.clearMeasurementCaches();
         }
 
         const receivedMeasurementUpdate = update.transactions.some((transaction) =>
@@ -387,20 +328,18 @@ class WrappedLineIndentPlugin implements PluginValue {
         }
 
         if (shouldRebuildDecorations) {
-            this.taskMeasurementContext = {
-                confirmVisibleMeasurements: measurementsNeedRefresh || update.focusChanged || viewportOrGeometryChanged,
-                selectionBeforeUpdate: update.selectionSet ? update.startState.selection : null,
-            };
-
             if (update.geometryChanged) {
                 this.markLinePaddingStale();
             }
 
-            this.decorations = this.buildDecorations();
-            this.taskMeasurementContext = {
-                confirmVisibleMeasurements: false,
-                selectionBeforeUpdate: null,
-            };
+            this.decorations = this.buildDecorations({
+                forceVisibleLineMeasurements:
+                    fullDocumentReplaced ||
+                    measurementsNeedRefresh ||
+                    update.selectionSet ||
+                    update.focusChanged ||
+                    viewportOrGeometryChanged,
+            });
             this.scheduleMeasure();
         }
     }
@@ -415,12 +354,23 @@ class WrappedLineIndentPlugin implements PluginValue {
         }
 
         this.pendingMeasurements.clear();
-        this.cachedPrefixWidths.clear();
+        this.measuredLineWidths.clear();
+        this.fallbackPrefixWidths.clear();
     }
 
-    private buildDecorations(): DecorationSet {
+    private clearMeasurementCaches(): void {
+        this.pendingMeasurements.clear();
+        this.measuredLineWidths.clear();
+        this.fallbackPrefixWidths.clear();
+        this.markLinePaddingStale();
+    }
+
+    private buildDecorations(
+        options: BuildDecorationsOptions = { forceVisibleLineMeasurements: false }
+    ): DecorationSet {
         const builder = new RangeSetBuilder<Decoration>();
         const state = this.view.state;
+        const visibleLineKeys = new Set<string>();
 
         this.pendingMeasurements.clear();
 
@@ -429,7 +379,10 @@ class WrappedLineIndentPlugin implements PluginValue {
 
             while (position <= range.to) {
                 const line = state.doc.lineAt(position);
-                this.addDecorationsForLine(builder, line);
+                const lineKey = this.addDecorationsForLine(builder, line, options);
+                if (lineKey) {
+                    visibleLineKeys.add(lineKey);
+                }
 
                 if (line.to >= range.to) {
                     break;
@@ -439,13 +392,18 @@ class WrappedLineIndentPlugin implements PluginValue {
             }
         }
 
+        this.pruneMeasuredLineWidths(visibleLineKeys);
         return builder.finish();
     }
 
-    private addDecorationsForLine(builder: RangeSetBuilder<Decoration>, line: Line): void {
+    private addDecorationsForLine(
+        builder: RangeSetBuilder<Decoration>,
+        line: Line,
+        options: BuildDecorationsOptions
+    ): string | null {
         const prefix = parseIndentPrefix(line.text);
         if (!prefix) {
-            return;
+            return null;
         }
 
         const prefixTo = line.from + prefix.text.length;
@@ -453,22 +411,22 @@ class WrappedLineIndentPlugin implements PluginValue {
             intersectsFoldedRange(this.view.state, line.from, prefixTo) ||
             isInIndentExcludedSyntax(this.view.state, line.from, prefixTo)
         ) {
-            return;
+            return null;
         }
 
-        const cacheKey = getPrefixCacheKey(prefix, line, this.view.state);
-        const cachedWidth = this.cachedPrefixWidths.get(cacheKey);
-        const shouldMeasureVisibleTaskPrefix = this.shouldMeasureVisibleTaskPrefix(prefix, line);
-        if (cachedWidth === undefined || shouldMeasureVisibleTaskPrefix) {
-            const targets = this.pendingMeasurements.get(cacheKey);
-            if (targets) {
-                targets.push({ from: line.from, to: prefixTo });
-            } else {
-                this.pendingMeasurements.set(cacheKey, [{ from: line.from, to: prefixTo }]);
-            }
+        const lineKey = getLineMeasurementKey(line, prefix);
+        const measuredWidth = this.measuredLineWidths.get(lineKey);
+        if (measuredWidth === undefined || options.forceVisibleLineMeasurements) {
+            this.pendingMeasurements.set(lineKey, {
+                fallbackKey: getFallbackPrefixKey(prefix.text),
+                from: line.from,
+                to: prefixTo,
+            });
         }
 
-        let decorationWidth = cachedWidth ?? this.getCachedWidthForPrefix(prefix.text);
+        // Prefer exact line measurements, then a recent equivalent-prefix width, then an estimate.
+        const fallbackWidth = this.fallbackPrefixWidths.get(getFallbackPrefixKey(prefix.text));
+        let decorationWidth = measuredWidth ?? fallbackWidth;
         if (decorationWidth === undefined && this.canUseEstimatedPrefixWidth()) {
             decorationWidth = estimatePrefixWidth(prefix.text, this.view);
         }
@@ -478,44 +436,15 @@ class WrappedLineIndentPlugin implements PluginValue {
         }
 
         addTabReplacementDecorations(builder, line, prefix.text, this.view);
+        return lineKey;
     }
 
-    private getCachedWidthForPrefix(prefix: string): number | undefined {
-        const keySuffix = `:${prefix}`;
-        for (const [cacheKey, width] of this.cachedPrefixWidths) {
-            if (cacheKey === prefix || cacheKey.endsWith(keySuffix)) {
-                return width;
+    private pruneMeasuredLineWidths(visibleLineKeys: Set<string>): void {
+        for (const lineKey of this.measuredLineWidths.keys()) {
+            if (!visibleLineKeys.has(lineKey)) {
+                this.measuredLineWidths.delete(lineKey);
             }
         }
-
-        return undefined;
-    }
-
-    private shouldMeasureVisibleTaskPrefix(prefix: ParsedIndentPrefix, line: Line): boolean {
-        if (prefix.checkboxOffset === null) {
-            return false;
-        }
-
-        if (this.taskMeasurementContext.confirmVisibleMeasurements) {
-            return true;
-        }
-
-        if (!this.taskMeasurementContext.selectionBeforeUpdate) {
-            return false;
-        }
-
-        const checkboxRange = getTaskListCheckboxRange(prefix, line);
-        if (!checkboxRange) {
-            return false;
-        }
-
-        return (
-            selectionIntersectsRange(
-                this.taskMeasurementContext.selectionBeforeUpdate,
-                checkboxRange.from,
-                checkboxRange.to
-            ) || selectionIntersectsRange(this.view.state.selection, checkboxRange.from, checkboxRange.to)
-        );
     }
 
     private scheduleMeasure(): void {
@@ -528,11 +457,8 @@ class WrappedLineIndentPlugin implements PluginValue {
         }
 
         this.measureScheduled = true;
-        const targets = new Map(
-            [...this.pendingMeasurements].map(([cacheKey, targetList]) => [cacheKey, [...targetList]])
-        );
+        const targets = new Map(this.pendingMeasurements);
         const measuredDoc = this.view.state.doc;
-        const measuredSelection = this.view.state.selection;
 
         this.view.requestMeasure<MeasureReadResult>({
             read: (view) => {
@@ -540,7 +466,7 @@ class WrappedLineIndentPlugin implements PluginValue {
                     return this.createEmptyMeasureResult();
                 }
 
-                return this.measurePrefixes(view, targets, measuredDoc, measuredSelection, this.linePadding.value);
+                return this.measurePrefixes(view, targets, measuredDoc, this.linePadding.value);
             },
             write: (result) => {
                 if (this.destroyed) {
@@ -561,9 +487,15 @@ class WrappedLineIndentPlugin implements PluginValue {
                 }
                 this.linePadding = { status: 'measured', value: result.linePaddingLeft };
 
-                for (const [prefix, width] of result.widths) {
-                    if (this.cachedPrefixWidths.get(prefix) !== width) {
-                        this.cachedPrefixWidths.set(prefix, width);
+                for (const [lineKey, width] of result.widths) {
+                    if (this.measuredLineWidths.get(lineKey) !== width) {
+                        this.measuredLineWidths.set(lineKey, width);
+                        changed = true;
+                    }
+
+                    const fallbackKey = targets.get(lineKey)?.fallbackKey;
+                    if (fallbackKey && this.fallbackPrefixWidths.get(fallbackKey) !== width) {
+                        this.fallbackPrefixWidths.set(fallbackKey, width);
                         changed = true;
                     }
                 }
@@ -627,50 +559,33 @@ class WrappedLineIndentPlugin implements PluginValue {
 
     private measurePrefixes(
         view: EditorView,
-        targets: Map<string, MeasurementTarget[]>,
+        targets: Map<string, MeasurementTarget>,
         measuredDoc: Text,
-        measuredSelection: EditorSelection,
         fallbackPaddingLeft: number
     ): MeasureReadResult {
         const measuredWidths = new Map<string, number>();
         const linePaddingLeft = getLinePaddingLeft(view, fallbackPaddingLeft);
-        if (view.state.doc !== measuredDoc || view.state.selection !== measuredSelection) {
+        if (view.state.doc !== measuredDoc) {
             return { linePaddingLeft, isStale: true, needsRetry: false, widths: measuredWidths };
         }
 
         let needsRetry = false;
-        for (const [cacheKey, targetList] of targets) {
-            const widths: number[] = [];
+        for (const [lineKey, target] of targets) {
+            const startCoords = view.coordsAtPos(target.from, 1);
+            const endCoords = view.coordsAtPos(target.to, -1);
 
-            for (const target of targetList) {
-                const startCoords = view.coordsAtPos(target.from, 1);
-                const endCoords = view.coordsAtPos(target.to, -1);
-
-                if (!startCoords || !endCoords) {
-                    needsRetry = true;
-                    continue;
-                }
-
-                const width = endCoords.left - startCoords.left;
-                if (width <= 0) {
-                    needsRetry = true;
-                    continue;
-                }
-
-                widths.push(width);
-            }
-
-            if (widths.length === 0) {
-                continue;
-            }
-
-            const collapsedWidth = collapseMeasuredWidth(cacheKey, widths);
-            if (collapsedWidth.needsRetry) {
+            if (!startCoords || !endCoords) {
                 needsRetry = true;
                 continue;
             }
 
-            measuredWidths.set(cacheKey, collapsedWidth.width);
+            const width = endCoords.left - startCoords.left;
+            if (width <= 0) {
+                needsRetry = true;
+                continue;
+            }
+
+            measuredWidths.set(lineKey, width);
         }
 
         return { linePaddingLeft, isStale: false, needsRetry, widths: measuredWidths };
@@ -714,7 +629,7 @@ export const legacyTaskListCheckboxTheme = EditorView.theme({
 
 export default () => {
     return {
-        plugin: (codeMirrorWrapper: CodeMirrorWrapper) => {
+        plugin: (codeMirrorWrapper: CodeMirrorControl) => {
             if (!codeMirrorWrapper.cm6) {
                 return;
             }
