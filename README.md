@@ -16,7 +16,7 @@ Examples handled:
 - Task lists
 - Nested block quotes
 - Lists inside block quotes
-- Plain indented paragraphs
+- Indented continuation paragraphs
 
 The plugin skips fenced and indented code blocks.
 
