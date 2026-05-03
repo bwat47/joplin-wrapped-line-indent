@@ -1,10 +1,10 @@
-A CodeMirror 6 `ViewPlugin` that implements hanging indentation by measuring the rendered pixel width of Markdown line prefixes and applying offset CSS decorations.
+A CodeMirror 6 `ViewPlugin` that implements hanging indentation by measuring rendered Markdown line prefixes and applying offset CSS decorations.
 
 ---
 
 ### 1. Core Mechanism
 
-The plugin aligns wrapped text with the end of each line prefix using a line decoration with two complementary CSS properties:
+Wrapped visual lines align with the end of a Markdown prefix through a line decoration with two complementary CSS properties:
 
 - **`padding-left`**: `PrefixWidth + BasePadding`
 - **`text-indent`**: `-PrefixWidth`
@@ -13,46 +13,46 @@ This keeps the first visual line at the editor margin while wrapped visual lines
 
 ### 2. Prefix Detection and Decoration Lifecycle
 
-- **`buildDecorations`**: Scans only `view.visibleRanges`, parses each visible line with `parseIndentPrefix`, and decorates lines with prefixes.
-- **Prefix metadata**: `ParsedIndentPrefix` records only the raw prefix text needed for measurement. It does not encode selection-derived render states.
-- **Direct line keys**: Exact measurements are keyed by visible line position and prefix text via `getLineMeasurementKey`.
-- **Forced visible remeasurement**: Selection, focus, viewport, geometry, and measurement-signature changes pass an explicit `forceVisibleLineMeasurements` option through `buildDecorations` so visible lines are remeasured while their previous widths remain displayed.
-- **Exclusion logic**: Lines inside `CodeBlock`, `FencedCode`, `CodeInfo`, or `HorizontalRule` syntax nodes are skipped.
-- **Tab replacement**: Tabs in measured prefixes are replaced with `TabWidget` instances so the rendered tab width is stable and measurable.
+- **Visible range scan**: `buildDecorations` scans `view.visibleRanges`, parses each visible line with `parseIndentPrefix`, and decorates lines with prefixes.
+- **Prefix metadata**: `ParsedIndentPrefix` records the raw prefix text used for measurement.
+- **Line measurement keys**: `getLineMeasurementKey` keys exact measurements by visible line position and prefix text.
+- **Syntax exclusions**: Lines inside `CodeBlock`, `FencedCode`, `CodeInfo`, or `HorizontalRule` syntax nodes are skipped.
+- **Forced visible remeasurement**: Selection, focus, viewport, geometry, and measurement-signature changes pass `forceVisibleLineMeasurements` through `buildDecorations` to refresh visible line measurements while preserving displayed widths.
+- **Tab replacement**: Tabs in measured prefixes are replaced with `TabWidget` instances that provide stable, measurable tab widths.
 
 ### 3. Measurement Pipeline
 
-To avoid layout thrashing, the plugin uses CodeMirror's `view.requestMeasure` read/write phases:
+Measurements run through CodeMirror's `view.requestMeasure` read/write phases:
 
 - **Read phase (`measurePrefixes`)**: For each pending visible line, calls `view.coordsAtPos` at the prefix start and end, then computes `endCoords.left - startCoords.left`.
 - **Write phase**: Stores successful measurements in `measuredLineWidths`, updates fallback prefix widths, records measured line padding, and dispatches `measurementsChanged` when decorations need to refresh.
 - **Stale document guard**: If the document changed before the measurement read completes, the result is discarded and measurement is rescheduled.
-- **Retry logic**: If coordinates are temporarily unavailable, one deferred refresh is allowed; after that, the plugin waits for the next external editor update rather than repeatedly dispatching refreshes.
+- **Retry logic**: Temporarily unavailable coordinates schedule one deferred refresh. Later refreshes come from the next editor update.
 
 ### 4. Tab vs. Space Handling
 
-The plugin treats tabs and spaces as physical layout objects:
+Tabs and spaces are measured as rendered layout:
 
 - **Spaces**: Measured directly through character coordinates.
 - **Tabs**: Replaced by `TabWidget` with a width from `getTabReplacementWidth`, based on `view.state.tabSize` and `view.defaultCharacterWidth / view.scaleX`.
-- **Precision**: The tab widget enforces the same width used by the estimate, so later `coordsAtPos` measurements observe the actual rendered layout.
+- **Rendered tab width**: The tab widget uses the same width formula as `estimatePrefixWidth`, so `coordsAtPos` observes the expected rendered layout.
 
 ### 5. Caching and Fallbacks
 
-- **`measuredLineWidths`**: Exact per-visible-line measurements keyed by line start and prefix text. This is the source of truth for rendered width.
-- **`fallbackPrefixWidths`**: Display-only fallback widths keyed by normalized prefix text. Task checkbox states (`[ ]`, `[x]`, `[X]`) share a fallback key so checkbox toggles can reuse a recent width while direct measurement catches up.
+- **`measuredLineWidths`**: Exact per-visible-line measurements keyed by line start and prefix text.
+- **`fallbackPrefixWidths`**: Display fallback widths keyed by normalized prefix text. Task checkbox states (`[ ]`, `[x]`, `[X]`) share a fallback key.
 - **Fallback order**: Decorations use exact line width first, then fallback prefix width, then `estimatePrefixWidth`.
-- **Measurement remains authoritative**: Fallback widths never suppress measurement. Missing exact line widths, or forced visible remeasurement, still queue `coordsAtPos` measurement.
-- **Invalidation**: `measuredLineWidths` is preserved across rebuilds for still-visible lines whose line-start/prefix key still matches, and pruned once those keys are no longer visible. `fallbackPrefixWidths` is kept across document, selection, focus, viewport, and geometry changes to reduce flicker, but is cleared when the measurement signature changes.
-- **`measurementSignature`**: Tracks `defaultCharacterWidth`, `defaultLineHeight`, `scaleX`, `scaleY`, and `tabSize`. Changes indicate font, zoom, scale, or tab metrics may have invalidated pixel widths.
+- **Measurement queueing**: Missing exact widths and forced visible remeasurement queue `coordsAtPos` measurement.
+- **Invalidation**: `measuredLineWidths` is preserved across rebuilds for still-visible lines whose line-start/prefix key still matches, then pruned for non-visible lines. `fallbackPrefixWidths` is kept across document, selection, focus, viewport, and geometry changes, and cleared when the measurement signature changes.
+- **`measurementSignature`**: Tracks `defaultCharacterWidth`, `defaultLineHeight`, `scaleX`, `scaleY`, and `tabSize` for font, zoom, scale, and tab metric changes.
 
 ### 6. Reactivity
 
-The plugin rebuilds decorations and/or remeasures on:
+The plugin rebuilds decorations and remeasures visible prefixes in response to:
 
-- `docChanged`: Content or prefixes changed; visible lines are rebuilt, matching visible exact measurements are reused, and stale non-visible line keys are pruned.
+- `docChanged`: Visible lines are rebuilt, matching visible exact measurements are reused, and stale non-visible line keys are pruned.
 - `selectionSet`: Joplin render-markup visibility may change; visible lines are remeasured without clearing displayed widths.
 - `focusChanged`: Editor render state may change; visible lines are remeasured.
 - `geometryChanged` / `viewportChanged`: Layout or visible ranges changed; visible lines are remeasured.
-- Syntax tree changes: Decorations are rebuilt when parsing state changes, so code blocks and horizontal rules are included or excluded correctly.
-- `measurementsChanged`: Internal effect used to apply newly measured widths without waiting for unrelated editor updates.
+- Syntax tree changes: Decorations are rebuilt when parser state changes.
+- `measurementsChanged`: Newly measured widths are applied through an internal effect.
