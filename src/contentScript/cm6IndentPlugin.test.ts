@@ -1,13 +1,14 @@
 import { markdown } from '@codemirror/lang-markdown';
 import { forceParsing } from '@codemirror/language';
 import { Compartment, EditorState } from '@codemirror/state';
-import type { Extension } from '@codemirror/state';
+import type { ChangeSpec, Extension } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import type { CodeMirrorControl } from 'api/types';
 
 import {
     default as createContentScript,
     getLineDecorationStyle,
+    isFullDocumentReplace,
     parseIndentPrefix,
     getTabReplacementWidth,
     isBlockCodeNode,
@@ -447,6 +448,32 @@ describe('wrappedLineIndentExtension', () => {
         view.destroy();
     });
 
+    it('clears cached measurements after a full document replacement', () => {
+        const view = createView('  - first item');
+        flushMeasureCycle(view);
+        flushMeasureCycle(view);
+
+        const plugin = view.plugin(wrappedLineIndentExtension) as unknown as {
+            fallbackPrefixWidths: Map<string, number>;
+            measuredLineWidths: Map<string, number>;
+        };
+        expect(plugin.measuredLineWidths.size).toBe(1);
+        expect(plugin.fallbackPrefixWidths.size).toBe(1);
+
+        view.dispatch({
+            changes: { from: 0, to: view.state.doc.length, insert: '  - replacement item' },
+        });
+
+        expect(plugin.measuredLineWidths.size).toBe(0);
+        expect(plugin.fallbackPrefixWidths.size).toBe(0);
+
+        flushMeasureCycle(view);
+        expect(plugin.measuredLineWidths.size).toBe(1);
+        expect(plugin.fallbackPrefixWidths.size).toBe(1);
+
+        view.destroy();
+    });
+
     it('prunes exact line measurements that are no longer visible', () => {
         const view = createView('  - first item');
         flushMeasureCycle(view);
@@ -656,6 +683,47 @@ describe('wrappedLineIndentExtension', () => {
 
         dispatchSpy.mockRestore();
         view.destroy();
+    });
+});
+
+describe('isFullDocumentReplace', () => {
+    const createTransaction = (doc: string, changes?: ChangeSpec) => {
+        const state = EditorState.create({ doc });
+        return state.update({ changes });
+    };
+
+    it('detects a single change replacing the whole previous document', () => {
+        const transaction = createTransaction('old note', {
+            from: 0,
+            to: 'old note'.length,
+            insert: 'new note',
+        });
+
+        expect(isFullDocumentReplace(transaction)).toBe(true);
+    });
+
+    it('ignores partial edits', () => {
+        const transaction = createTransaction('old note', {
+            from: 'old'.length,
+            insert: 'er',
+        });
+
+        expect(isFullDocumentReplace(transaction)).toBe(false);
+    });
+
+    it('ignores multiple changes even when they cover the document overall', () => {
+        const transaction = createTransaction('old note', [
+            { from: 0, to: 3, insert: 'new' },
+            { from: 4, to: 8, insert: 'text' },
+        ]);
+
+        expect(isFullDocumentReplace(transaction)).toBe(false);
+    });
+
+    it('ignores transactions without document changes', () => {
+        const transaction = createTransaction('old note');
+
+        expect(isFullDocumentReplace(transaction)).toBe(false);
     });
 });
 

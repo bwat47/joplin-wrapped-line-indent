@@ -1,5 +1,13 @@
 import { foldedRanges, syntaxTree, syntaxTreeAvailable } from '@codemirror/language';
-import { RangeSetBuilder, StateEffect, countColumn, type EditorState, type Line, type Text } from '@codemirror/state';
+import {
+    RangeSetBuilder,
+    StateEffect,
+    countColumn,
+    type EditorState,
+    type Line,
+    type Text,
+    type Transaction,
+} from '@codemirror/state';
 import {
     Decoration,
     type DecorationSet,
@@ -237,6 +245,32 @@ function getMeasurementSignature(view: EditorView): string {
     return [view.defaultCharacterWidth, view.defaultLineHeight, view.scaleX, view.scaleY, view.state.tabSize].join(':');
 }
 
+/**
+ * Detects a transaction that replaces the whole document in one change.
+ *
+ * Examples:
+ * - Note switches or sync refreshes: replace `[0, previousDoc.length]`
+ * - Ordinary edits: insert/delete only part of the previous document
+ */
+export function isFullDocumentReplace(transaction: Transaction): boolean {
+    if (!transaction.docChanged) {
+        return false;
+    }
+
+    const docLength = transaction.startState.doc.length;
+    let changeCount = 0;
+    let replacedWholeDocument = false;
+
+    transaction.changes.iterChanges((fromA, toA) => {
+        changeCount++;
+        if (changeCount === 1 && fromA === 0 && toA === docLength) {
+            replacedWholeDocument = true;
+        }
+    });
+
+    return replacedWholeDocument && changeCount === 1;
+}
+
 class WrappedLineIndentPlugin implements PluginValue {
     public decorations: DecorationSet = Decoration.none;
 
@@ -265,12 +299,17 @@ class WrappedLineIndentPlugin implements PluginValue {
     }
 
     public update(update: ViewUpdate): void {
+        const fullDocumentReplaced = update.transactions.some(isFullDocumentReplace);
         const nextMeasurementSignature = getMeasurementSignature(this.view);
         const measurementsNeedRefresh = nextMeasurementSignature !== this.measurementSignature;
         if (measurementsNeedRefresh) {
             this.measurementSignature = nextMeasurementSignature;
             this.fallbackPrefixWidths.clear();
             this.markLinePaddingStale();
+        }
+
+        if (fullDocumentReplaced) {
+            this.clearMeasurementCaches();
         }
 
         const receivedMeasurementUpdate = update.transactions.some((transaction) =>
@@ -294,7 +333,11 @@ class WrappedLineIndentPlugin implements PluginValue {
 
             this.decorations = this.buildDecorations({
                 forceVisibleLineMeasurements:
-                    measurementsNeedRefresh || update.selectionSet || update.focusChanged || viewportOrGeometryChanged,
+                    fullDocumentReplaced ||
+                    measurementsNeedRefresh ||
+                    update.selectionSet ||
+                    update.focusChanged ||
+                    viewportOrGeometryChanged,
             });
             this.scheduleMeasure();
         }
@@ -312,6 +355,13 @@ class WrappedLineIndentPlugin implements PluginValue {
         this.pendingMeasurements.clear();
         this.measuredLineWidths.clear();
         this.fallbackPrefixWidths.clear();
+    }
+
+    private clearMeasurementCaches(): void {
+        this.pendingMeasurements.clear();
+        this.measuredLineWidths.clear();
+        this.fallbackPrefixWidths.clear();
+        this.markLinePaddingStale();
     }
 
     private buildDecorations(
