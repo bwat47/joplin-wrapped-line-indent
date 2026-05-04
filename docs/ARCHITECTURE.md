@@ -11,6 +11,8 @@ Wrapped visual lines align with the end of a Markdown prefix through a line deco
 
 This keeps the first visual line at the editor margin while wrapped visual lines start after the Markdown prefix.
 
+To ensure accurate values for the indentation padding, the plugin measures the exact rendered pixel width of each line's prefix (list marker, blockquote chevron, whitespace, etc.) from the DOM.
+
 ### 2. Prefix Detection and Decoration Lifecycle
 
 - **Visible range scan**: `buildDecorations` scans `view.visibleRanges`, parses each visible line with `parseIndentPrefix`, and decorates lines with prefixes.
