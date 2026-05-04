@@ -8,15 +8,13 @@
 
 ## Context
 
-Soft-wrapped lines in a CodeMirror editor need a hanging indent so that continuation lines align visually with the first non-marker character of the line — past any list marker, blockquote chevron, task checkbox, or leading whitespace. This requires knowing the _pixel width_ of the prefix on each line, which cannot be computed purely from the document text: it depends on font rendering, device pixel ratio, zoom level, tab size, and any inline widgets that may affect glyph positions.
-
-Two caching strategies were considered for storing those pixel measurements.
+Soft-wrapped lines need a hanging indent aligned past any list marker, blockquote chevron, task checkbox, or leading whitespace. This requires the _pixel width_ of each line's prefix, which cannot be computed from text alone — it depends on font rendering, DPR, zoom, tab size, and inline widgets.
 
 ---
 
 ## Decision
 
-We use a **position-keyed primary cache** (`${line.from}:${prefix.text}`) combined with a **prefix-keyed fallback cache** (keyed by normalised prefix text, with task-list checkboxes canonicalised to `[ ]`).
+A **position-keyed primary cache** (`${line.from}:${prefix.text}`) combined with a **prefix-keyed fallback cache** (keyed by normalized prefix text, with task-list checkboxes canonicalized to `[ ]`).
 
 ---
 
@@ -24,24 +22,19 @@ We use a **position-keyed primary cache** (`${line.from}:${prefix.text}`) combin
 
 ### Option A — Prefix-text-only cache (rejected)
 
-Key measurements solely by the normalised prefix string (e.g. `"  - "`, `"> "`). A cache hit on any line with the same prefix text reuses that measurement for all other lines sharing that prefix.
+Key measurements solely by normalized prefix string; any line sharing a prefix reuses the cached width.
 
-**Advantages:**
-
-- Simpler implementation (on paper) — one cache, no fallback logic.
-- Measurements naturally survive scrolling: a line that leaves and re-enters the viewport reuses its cached value immediately, with no re-measurement round-trip.
-- No position-tracking overhead.
+**Advantages:** Simpler; measurements survive scrolling without re-measurement.
 
 **Problems:**
 
-- Two lines with identical prefix text may render at different pixel widths if their surroundings differ — for example, if an inline widget appears earlier in the line, or if font shaping causes different glyph widths for the same character sequence in different contexts. Using a shared measurement in those cases produces incorrect indentation for some lines.
-- Without separate pruning or eviction, the cache can hold stale measurements for prefix patterns that no longer appear, growing with the number of distinct prefixes seen over time.
-- There is no way to force re-measurement of a specific line without invalidating all lines sharing that prefix, making targeted refresh difficult.
-- In practise, these issues end up greatly complicating this approach (unless the decision is made to not handle edge cases like lists inside block quotes).
+- Two lines with identical prefix text can render at different pixel widths (e.g. if markup is hidden/revealed on one line), producing incorrect indentation.
+- No way to force re-measurement of a specific line without invalidating all lines sharing that prefix.
+- Together, these problems significantly complicate this approach due to interactions with Joplin's markup rendering (where markdown can be conditionally revealed based on cursor position).
 
 ### Option B — Position-keyed cache with prefix fallback (chosen)
 
-Key the primary cache by `${line.from}:${prefix.text}`. Additionally maintain a secondary cache keyed by normalised prefix text. When a line has no primary measurement yet, consult the fallback cache before falling back further to a character-width estimate.
+Key the primary cache by `${line.from}:${prefix.text}`; maintain a secondary cache keyed by normalized prefix text as a fallback.
 
 ---
 
@@ -49,39 +42,41 @@ Key the primary cache by `${line.from}:${prefix.text}`. Additionally maintain a 
 
 ### Correctness of position-based keying
 
-Keying by `line.from` ensures each line gets its own measurement. Lines that share a prefix string but differ in their rendered pixel width — due to surrounding inline widgets, proportional font effects, or other layout influences — receive independent, correct indentation values rather than inheriting a potentially wrong shared value.
+Each line gets its own measurement. Lines sharing a prefix string but differing in rendered width — due to surrounding inline widgets (hidden markup), font shaping, or sub-pixel positioning — receive independent, correct values.
 
-### Why the fallback cache is load-bearing, not merely a first-render optimisation
+Concrete example: clicking into a task list item expands a rendered checkbox back to raw `- [ ]` markdown. A prefix-only cache would force all inactive items (rendered checkboxes, narrower) to adopt the wider width of the active raw-text line. Position keying gives the active line its own independent measurement, leaving others unaffected.
 
-The fallback cache was initially motivated by the cold-cache problem — on first render no measurements exist, so without it lines would briefly show no indentation. But in practice the more severe problem it solves is **per-keystroke flicker across all visible lines below the edit point**.
+### Why the fallback cache is load-bearing, not just a first-render optimization
 
-Every edit shifts `line.from` for all lines after the edit point. A list item that was at position 1500 moves to 1502 after a two-character insertion. Because the primary cache key includes `line.from`, every visible line after the edit point gets a simultaneous cache miss — not just on first render, but on every single keystroke. Without the fallback cache, those visible lines would fall back to a character-width estimate once line padding is known, then snap to the exact width when the measurement round-trip completes. In a document with many visible list items this can be visibly jarring.
+Every edit shifts `line.from` for all lines after the edit point, causing a simultaneous primary-cache miss for every visible post-edit line on every keystroke. Without the fallback, those lines fall back to a character-width estimate and snap to the exact width when the measurement round-trip completes — visibly jarring in documents with many list items.
 
-The fallback cache survives ordinary doc changes because its key is the normalised prefix text, which is position-independent. `"- "` is still `"- "` regardless of where in the document the line now sits. So even though the primary cache misses on every post-edit render for shifted visible lines, the fallback immediately provides the previous measurement, and the decoration is applied on the same frame as the edit. The measurement round-trip still runs and updates the primary cache, but for ordinary edits elsewhere in the document the fallback value is usually already correct, so there is often nothing visible to snap into place.
+The fallback cache's key is position-independent, so it survives `line.from` shifts. Even though the primary cache misses for all shifted lines, the fallback immediately provides the previous measurement, applying the decoration on the same frame as the edit. The round-trip still runs, but in ordinary edits the fallback value is already correct, so there is nothing to snap.
 
-This means the fallback cache is what makes position-keyed caching viable at all in a live editor. Without it, position-keyed caching would be strictly worse than prefix-only caching for the common case of ordinary typing, because prefix keys are stable across edits whereas position keys are not. The two caches are complementary: the primary cache provides per-line correctness; the fallback cache provides the stability across edits that the primary cache structurally cannot.
+The two caches are complementary: **the primary cache provides per-line correctness; the fallback cache provides the stability the primary cache structurally cannot.** The `TASK_LIST_CHECKBOX_PATTERN` normalization (`[x]`/`[X]` → `[ ]`) ensures checked and unchecked task items share a fallback entry, preventing a blank frame while direct measurement catches up.
 
-When a line has no primary measurement, `addDecorationsForLine` consults `fallbackPrefixWidths` using the normalised prefix key. Because many lines share common prefixes (`"- "`, `"> "`, `"  * [x] "` → `"  * [ ] "`), the fallback cache is populated quickly from the first few measured lines and provides a good approximation for all others immediately. The `TASK_LIST_CHECKBOX_PATTERN` normalisation (`[x]` and `[X]` → `[ ]`) ensures that checked and unchecked task items share a fallback entry, which avoids a blank or estimated-width frame while direct measurement catches up. If the rendered widths differ in a particular editor state, the position-keyed primary measurement remains authoritative and corrects the fallback on the next refresh.
+### Performance
 
-### Controlled cache growth via pruning
+Decoration rebuilding iterates only visible lines (`O(V)`, not `O(N)`), so even a 50,000-line document incurs no more work per keystroke than the viewport requires.
 
-`pruneMeasuredLineWidths` removes primary cache entries for lines no longer in the visible viewport at the end of each `buildDecorations` call. This bounds memory usage in long documents. The fallback cache is intentionally not pruned, because it is small (one entry per distinct prefix pattern) and serves as the warm-start approximation for lines re-entering the viewport.
+### Controlled cache growth
 
-### Explicit invalidation of stale measurements
+`pruneMeasuredLineWidths` removes primary cache entries for lines no longer visible after each `buildDecorations` call. The fallback cache is intentionally not pruned — it's small (one entry per distinct prefix pattern) and serves as the warm-start approximation for lines re-entering the viewport.
 
-The `measurementSignature` — a composite of `defaultCharacterWidth`, `defaultLineHeight`, `scaleX`, `scaleY`, and `tabSize` — is checked on every update. When it changes, the fallback cache is cleared, visible lines are force-remeasured, and `linePadding` is marked stale. Existing visible primary measurements are left in place temporarily so decorations do not disappear while the refreshed measurements are pending. This handles font changes, zoom, and device pixel ratio shifts explicitly while preserving the last known exact widths until replacement measurements arrive.
+### Explicit invalidation
+
+The `measurementSignature` — a composite of `defaultCharacterWidth`, `defaultLineHeight`, `scaleX`, `scaleY`, and `tabSize` — is checked on every update. When it changes, the fallback cache is cleared and visible lines are force-remeasured. Existing primary measurements are kept until replacements arrive, so decorations don't disappear mid-transition. This handles font changes, zoom, and DPR shifts explicitly.
 
 ### Stale-document guard
 
-`measurePrefixes` compares `view.state.doc` against the document captured at schedule time (`measuredDoc`). If they differ — because an edit arrived between `scheduleMeasure` and the `read` callback — the result is discarded as stale and the measurement is retried. This prevents a class of subtle bugs where pixel widths measured against an old document layout are applied to a new document state.
+`measurePrefixes` compares `view.state.doc` against the document captured at schedule time. If they differ (an edit arrived between `scheduleMeasure` and the `read` callback), the result is discarded and measurement retried, preventing pixel widths from an old layout being applied to a new document state.
 
-### `forceVisibleLineMeasurements` for high-impact transitions
+### `forceVisibleLineMeasurements`
 
-On events that are likely to invalidate many measurements at once — full document replaces, viewport changes, geometry changes, focus changes, selection changes — `forceVisibleLineMeasurements` is set to `true`. This causes all visible lines to be added to `pendingMeasurements` regardless of whether they have a primary cache entry, ensuring measurements are refreshed promptly rather than waiting for natural cache expiry.
+On high-impact transitions — full document replaces, viewport/geometry changes, focus/selection changes — all visible lines are added to `pendingMeasurements` regardless of primary cache state, ensuring prompt refresh.
 
-### Single retry budget for incomplete measurements
+### Single retry budget
 
-When `coordsAtPos` returns null for some lines (e.g. because the layout is not yet stable), `needsRetry` is set and the measurement cycle repeats. The `incompleteMeasurementRefreshSpent` flag ensures this retry happens at most once per external trigger, preventing an infinite refresh loop in degenerate cases where coordinates remain unavailable.
+When `coordsAtPos` returns null (layout not yet stable), `needsRetry` is set and the cycle repeats. `incompleteMeasurementRefreshSpent` limits this to one retry per external trigger, preventing infinite refresh loops.
 
 ---
 
@@ -90,13 +85,12 @@ When `coordsAtPos` returns null for some lines (e.g. because the layout is not y
 **Positive:**
 
 - Each line receives an independently correct indentation measurement.
-- Per-keystroke flicker across all lines after the edit point is eliminated by the fallback cache, which is position-independent and survives `line.from` shifts.
-- Flicker on first render is minimised by fallback widths once available and by character-width estimates after line padding is known; after full document replaces, both caches are cleared and visible lines rely on estimates or fresh measurement.
+- Per-keystroke flicker across all post-edit lines is eliminated by the fallback cache.
 - Memory usage is bounded by viewport size for the primary cache.
 - Cache invalidation is explicit and auditable via `measurementSignature` and `clearMeasurementCaches`.
 
 **Negative:**
 
-- Lines that scroll off-screen lose their primary cache entry and require a re-measurement round-trip when they return. In practice this is one frame of latency and is covered by the fallback cache, but it is a cost that the prefix-only strategy does not incur.
-- The fallback cascade (`measuredWidth ?? fallbackWidth ?? estimatedWidth`) must be understood by anyone modifying `addDecorationsForLine`. Incorrect changes to cache key normalisation (e.g. the checkbox pattern) can cause fallback misses that reintroduce flicker.
-- The `incompleteMeasurementRefreshSpent` guard is a subtle invariant: it resets on any `externalRefreshTrigger` and is consumed by the first incomplete-measurement retry. Callers adding new update paths must ensure they set `externalRefreshTrigger` appropriately or the retry budget will not reset.
+- Lines scrolling off-screen lose their primary cache entry and require a re-measurement round-trip on return (covered by the fallback, but a cost prefix-only caching doesn't incur).
+- The fallback cascade (`measuredWidth ?? fallbackWidth ?? estimatedWidth`) in `addDecorationsForLine` must be understood by maintainers. Incorrect changes to cache key normalization (e.g. the checkbox pattern) can silently reintroduce flicker.
+- `incompleteMeasurementRefreshSpent` resets on any `externalRefreshTrigger`; new update paths must set that flag appropriately or the retry budget won't reset.
