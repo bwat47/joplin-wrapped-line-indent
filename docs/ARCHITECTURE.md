@@ -35,7 +35,7 @@ Measurements run through CodeMirror's `view.requestMeasure` read/write phases:
 
 Tabs and spaces are measured as rendered layout:
 
-- **Spaces**: Measured directly through character coordinates.
+- **Spaces**: Exact prefix widths are measured directly through character coordinates. The first available leading space is also measured and cached as `spaceCharacterWidth` so `estimatePrefixWidth` can avoid relying on `defaultCharacterWidth` for newly introduced space indentation.
 - **Tabs**: Replaced by `TabWidget` with a width from `getTabReplacementWidth`, based on `view.state.tabSize` and `view.defaultCharacterWidth / view.scaleX`.
 - **Rendered tab width**: The tab widget uses the same width formula as `estimatePrefixWidth`, so `coordsAtPos` observes the expected rendered layout.
 
@@ -43,9 +43,10 @@ Tabs and spaces are measured as rendered layout:
 
 - **`measuredLineWidths`**: Exact per-visible-line measurements keyed by line start and prefix text.
 - **`fallbackPrefixWidths`**: Display fallback widths keyed by normalized prefix text. Task checkbox states (`[ ]`, `[x]`, `[X]`) share a fallback key.
+- **`spaceCharacterWidth`**: A cached measurement of one rendered leading space, used only by `estimatePrefixWidth` when exact and fallback prefix widths are unavailable.
 - **Fallback order**: Decorations use exact line width first, then fallback prefix width, then `estimatePrefixWidth`.
 - **Measurement queueing**: Missing exact widths and forced visible remeasurement queue `coordsAtPos` measurement.
-- **Invalidation**: `measuredLineWidths` is preserved across rebuilds for still-visible lines whose line-start/prefix key still matches, then pruned for non-visible lines. `fallbackPrefixWidths` is kept across document, selection, focus, viewport, and geometry changes, and cleared when the measurement signature changes.
+- **Invalidation**: `measuredLineWidths` is preserved across rebuilds for still-visible lines whose line-start/prefix key still matches, then pruned for non-visible lines. `fallbackPrefixWidths` is kept across document, selection, focus, viewport, and geometry changes, and cleared when the measurement signature changes. `spaceCharacterWidth` is also cleared when the measurement signature changes.
 - **`measurementSignature`**: Tracks `defaultCharacterWidth`, `defaultLineHeight`, `scaleX`, `scaleY`, and `tabSize` for font, zoom, scale, and tab metric changes.
 
 ### 6. Reactivity
