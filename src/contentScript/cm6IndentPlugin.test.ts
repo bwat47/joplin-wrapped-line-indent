@@ -532,6 +532,40 @@ describe('wrappedLineIndentExtension', () => {
         view.destroy();
     });
 
+    it('uses cached measured space width for a newly deeper space indent', () => {
+        const view = createView('  first item');
+
+        Object.defineProperty(view, 'defaultCharacterWidth', {
+            configurable: true,
+            value: 8,
+        });
+
+        coordsAtPosSpy.mockImplementation((position) => {
+            const line = view.state.doc.lineAt(position);
+            const offset = position - line.from;
+            const leadingSpaces = /^ */.exec(line.text)?.[0].length ?? 0;
+            const left = Math.min(offset, leadingSpaces) * 6 + Math.max(0, offset - leadingSpaces) * 8;
+
+            return { left, right: left, top: 0, bottom: 16 };
+        });
+
+        flushMeasureCycle(view);
+        flushMeasureCycle(view);
+        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('22px');
+
+        view.dispatch({
+            changes: { from: view.state.doc.line(1).from, insert: '  ' },
+        });
+
+        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('34px');
+
+        flushMeasureCycle(view);
+        flushMeasureCycle(view);
+        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('34px');
+
+        view.destroy();
+    });
+
     it('uses a fallback estimate when one visible line is temporarily unavailable', () => {
         const view = createView('  - first item\n  - second item');
         const secondLine = view.state.doc.line(2);
