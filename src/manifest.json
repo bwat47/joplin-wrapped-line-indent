@@ -5,11 +5,11 @@
     "version": "1.1.1",
     "platforms": ["desktop", "mobile"],
     "name": "Wrapped Line Indentation",
-    "description": "Indent wrapped lines in the markdown editor",
+    "description": "Indent wrapped lines in the markdown editor (hanging indent)",
     "author": "bwat47",
     "homepage_url": "https://github.com/bwat47/joplin-wrapped-line-indent",
     "repository_url": "https://github.com/bwat47/joplin-wrapped-line-indent",
-    "keywords": ["editor", "wrapping", "alignment", "list"],
+    "keywords": ["editor", "wrapping", "alignment", "list", "indent"],
     "categories": ["appearance", "editor"],
     "screenshots": [{ "src": "images/screenshot1.png", "label": "wrapped line indent screenshot 1" }],
     "icons": {
