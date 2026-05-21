@@ -1,7 +1,7 @@
 # ADR: Wrapped Line Indent — Position-Keyed Cache with Prefix Fallback
 
 **Status:** Accepted  
-**Date:** 2025-01-01  
+**Date:** 2026-05-03  
 **Component:** `wrappedLineIndentExtension` (`WrappedLineIndentPlugin`)
 
 ---
