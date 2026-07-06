@@ -4,6 +4,8 @@ import { Compartment, EditorState } from '@codemirror/state';
 import type { ChangeSpec, Extension } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import type { CodeMirrorControl } from 'api/types';
+import { vi } from 'vitest';
+import type { MockInstance } from 'vitest';
 
 import {
     default as createContentScript,
@@ -26,7 +28,7 @@ describe('wrappedLineIndentExtension', () => {
     let nextFrameId: number;
     let originalRequestAnimationFrame: typeof window.requestAnimationFrame;
     let originalCancelAnimationFrame: typeof window.cancelAnimationFrame;
-    let coordsAtPosSpy: jest.SpiedFunction<EditorView['coordsAtPos']>;
+    let coordsAtPosSpy: MockInstance<EditorView['coordsAtPos']>;
     let styleElement: HTMLStyleElement;
 
     const flushAnimationFrames = () => {
@@ -69,12 +71,12 @@ describe('wrappedLineIndentExtension', () => {
                 extensionGroups.push(extension);
             },
             editor: {},
-            supportsCommand: jest.fn(),
-            execCommand: jest.fn(),
-            registerCommand: jest.fn(),
+            supportsCommand: vi.fn(),
+            execCommand: vi.fn(),
+            registerCommand: vi.fn(),
             joplinExtensions: {
-                completionSource: jest.fn(),
-                enableLanguageDataAutocomplete: { of: jest.fn() },
+                completionSource: vi.fn(),
+                enableLanguageDataAutocomplete: { of: vi.fn() },
                 noteIdFacet: {},
                 setNoteIdEffect: {},
             },
@@ -84,7 +86,7 @@ describe('wrappedLineIndentExtension', () => {
 
         expect(extensionGroups).toHaveLength(1);
         expect(extensionGroups[0]).toEqual(
-            expect.arrayContaining([legacyTaskListCheckboxTheme, wrappedLineIndentExtension])
+            expect.arrayContaining([legacyTaskListCheckboxTheme, wrappedLineIndentExtension] as unknown[])
         );
     });
 
@@ -106,7 +108,7 @@ describe('wrappedLineIndentExtension', () => {
         global.requestAnimationFrame = window.requestAnimationFrame;
         global.cancelAnimationFrame = window.cancelAnimationFrame;
 
-        coordsAtPosSpy = jest.spyOn(EditorView.prototype, 'coordsAtPos').mockImplementation((position) => {
+        coordsAtPosSpy = vi.spyOn(EditorView.prototype, 'coordsAtPos').mockImplementation((position) => {
             const left = position * 8;
             return { left, right: left, top: 0, bottom: 16 };
         });
@@ -637,7 +639,7 @@ describe('wrappedLineIndentExtension', () => {
 
     it('applies an exact measurement on the one deferred follow-up refresh', () => {
         const view = createView('> - item');
-        const dispatchSpy = jest.spyOn(view, 'dispatch');
+        const dispatchSpy = vi.spyOn(view, 'dispatch');
         let measurementAvailable = false;
 
         coordsAtPosSpy.mockImplementation((position) => {
@@ -706,7 +708,7 @@ describe('wrappedLineIndentExtension', () => {
 
     it('stops self-refreshing after one incomplete follow-up measurement', () => {
         const view = createView('> - item');
-        const dispatchSpy = jest.spyOn(view, 'dispatch');
+        const dispatchSpy = vi.spyOn(view, 'dispatch');
 
         coordsAtPosSpy.mockImplementation(() => null);
 
@@ -763,7 +765,7 @@ describe('wrappedLineIndentExtension', () => {
         const plugin = view.plugin(wrappedLineIndentExtension) as unknown as {
             buildDecorations(): unknown;
         };
-        const buildDecorationsSpy = jest.spyOn(plugin, 'buildDecorations');
+        const buildDecorationsSpy = vi.spyOn(plugin, 'buildDecorations');
 
         expect(forceParsing(view, view.state.doc.length, 1000)).toBe(true);
 
@@ -775,7 +777,7 @@ describe('wrappedLineIndentExtension', () => {
 
     it('does not dispatch a refresh from a pending measure after plugin destruction', () => {
         const view = createView('- item');
-        const dispatchSpy = jest.spyOn(view, 'dispatch');
+        const dispatchSpy = vi.spyOn(view, 'dispatch');
         const plugin = view.plugin(wrappedLineIndentExtension);
 
         (plugin as unknown as { destroy(): void }).destroy();
