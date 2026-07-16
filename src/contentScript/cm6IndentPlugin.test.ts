@@ -1,6 +1,6 @@
 import { markdown } from '@codemirror/lang-markdown';
 import { forceParsing } from '@codemirror/language';
-import { Compartment, EditorState } from '@codemirror/state';
+import { Compartment, EditorState, StateEffect } from '@codemirror/state';
 import type { ChangeSpec, Extension } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import type { CodeMirrorControl } from 'api/types';
@@ -211,6 +211,38 @@ describe('wrappedLineIndentExtension', () => {
         expect(
             [...view.dom.querySelectorAll<HTMLElement>('.cm-wrapped-line-indent')].map((line) => line.style.paddingLeft)
         ).toEqual(['22px', '38px']);
+
+        view.destroy();
+    });
+
+    it('remeasures block quote prefixes when marker visibility changes via an effect-only transaction', () => {
+        // Joplin >= 3.5 toggles render-markup visibility on mouseup through a transaction
+        // that carries only a private state effect, without a selection or document change.
+        const toggleMarkupEffect = StateEffect.define<null>();
+        const view = createView('> - quoted item');
+        let markupRevealed = false;
+        coordsAtPosSpy.mockImplementation((position) => {
+            const line = view.state.doc.lineAt(position);
+            const characterWidth = markupRevealed ? 8 : 4;
+            const left = position <= line.from + 1 ? 0 : 4 * characterWidth;
+            return { left, right: left, top: 0, bottom: 16 };
+        });
+
+        flushMeasureCycle(view);
+        flushMeasureCycle(view);
+        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('26px');
+
+        markupRevealed = true;
+        view.dispatch({ effects: toggleMarkupEffect.of(null) });
+        flushMeasureCycle(view);
+        flushMeasureCycle(view);
+        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('42px');
+
+        markupRevealed = false;
+        view.dispatch({ effects: toggleMarkupEffect.of(null) });
+        flushMeasureCycle(view);
+        flushMeasureCycle(view);
+        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('26px');
 
         view.destroy();
     });
