@@ -338,10 +338,19 @@ class WrappedLineIndentPlugin implements PluginValue {
         const receivedMeasurementUpdate = update.transactions.some((transaction) =>
             transaction.effects.some((effect) => effect.is(measurementsChanged))
         );
+        // Joplin >= 3.7 toggles render-markup visibility on mouseup via a transaction that
+        // carries only a private state effect (no doc/selection/focus change), so any foreign
+        // effect must force a remeasure of the visible prefixes.
+        const receivedExternalEffect = update.transactions.some((transaction) =>
+            transaction.effects.some((effect) => !effect.is(measurementsChanged))
+        );
         const editorContentOrStateChanged = update.docChanged || update.selectionSet || update.focusChanged;
         const viewportOrGeometryChanged = update.viewportChanged || update.geometryChanged;
         const externalRefreshTrigger =
-            measurementsNeedRefresh || editorContentOrStateChanged || viewportOrGeometryChanged;
+            measurementsNeedRefresh ||
+            editorContentOrStateChanged ||
+            viewportOrGeometryChanged ||
+            receivedExternalEffect;
         const syntaxTreeChanged = syntaxTree(update.startState) !== syntaxTree(update.state);
         const shouldRebuildDecorations = externalRefreshTrigger || receivedMeasurementUpdate || syntaxTreeChanged;
 
@@ -360,7 +369,8 @@ class WrappedLineIndentPlugin implements PluginValue {
                     measurementsNeedRefresh ||
                     update.selectionSet ||
                     update.focusChanged ||
-                    viewportOrGeometryChanged,
+                    viewportOrGeometryChanged ||
+                    receivedExternalEffect,
             });
             this.scheduleMeasure();
         }

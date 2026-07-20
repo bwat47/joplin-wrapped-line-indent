@@ -56,6 +56,7 @@ The plugin rebuilds decorations and remeasures visible prefixes in response to:
 - `docChanged`: Visible lines are rebuilt, matching visible exact measurements are reused, and stale non-visible line keys are pruned.
 - `selectionSet`: Joplin render-markup visibility may change; visible lines are remeasured without clearing displayed widths.
 - `focusChanged`: Editor render state may change; visible lines are remeasured.
+- External state effects: Joplin ≥ 3.7 toggles render-markup visibility on mouseup through a transaction carrying only a private state effect; any transaction with a non-`measurementsChanged` effect forces visible line remeasurement.
 - `geometryChanged` / `viewportChanged`: Layout or visible ranges changed; visible lines are remeasured.
 - Syntax tree changes: Decorations are rebuilt when parser state changes.
 - `measurementsChanged`: Newly measured widths are applied through an internal effect.
