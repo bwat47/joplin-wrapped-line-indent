@@ -216,7 +216,7 @@ describe('wrappedLineIndentExtension', () => {
     });
 
     it('remeasures block quote prefixes when marker visibility changes via an effect-only transaction', () => {
-        // Joplin >= 3.5 toggles render-markup visibility on mouseup through a transaction
+        // Joplin >= 3.7 toggles render-markup visibility on mouseup through a transaction
         // that carries only a private state effect, without a selection or document change.
         const toggleMarkupEffect = StateEffect.define<null>();
         const view = createView('> - quoted item');
