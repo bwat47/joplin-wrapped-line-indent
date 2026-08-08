@@ -63,33 +63,6 @@ describe('wrappedLineIndentExtension', () => {
         return view;
     };
 
-    it('registers the legacy task-list checkbox theme with the plugin', () => {
-        const extensionGroups: unknown[] = [];
-        const codeMirrorWrapper: CodeMirrorControl = {
-            cm6: {} as EditorView,
-            addExtension: (extension) => {
-                extensionGroups.push(extension);
-            },
-            editor: {},
-            supportsCommand: vi.fn(),
-            execCommand: vi.fn(),
-            registerCommand: vi.fn(),
-            joplinExtensions: {
-                completionSource: vi.fn(),
-                enableLanguageDataAutocomplete: { of: vi.fn() },
-                noteIdFacet: {},
-                setNoteIdEffect: {},
-            },
-        };
-
-        createContentScript().plugin(codeMirrorWrapper);
-
-        expect(extensionGroups).toHaveLength(1);
-        expect(extensionGroups[0]).toEqual(
-            expect.arrayContaining([legacyTaskListCheckboxTheme, wrappedLineIndentExtension] as unknown[])
-        );
-    });
-
     beforeEach(() => {
         frameCallbacks = new Map();
         nextFrameId = 1;
@@ -127,6 +100,33 @@ describe('wrappedLineIndentExtension', () => {
         window.cancelAnimationFrame = originalCancelAnimationFrame;
         global.requestAnimationFrame = originalRequestAnimationFrame;
         global.cancelAnimationFrame = originalCancelAnimationFrame;
+    });
+
+    it('registers the legacy task-list checkbox theme with the plugin', () => {
+        const extensionGroups: unknown[] = [];
+        const codeMirrorWrapper: CodeMirrorControl = {
+            cm6: {} as EditorView,
+            addExtension: (extension) => {
+                extensionGroups.push(extension);
+            },
+            editor: {},
+            supportsCommand: vi.fn(),
+            execCommand: vi.fn(),
+            registerCommand: vi.fn(),
+            joplinExtensions: {
+                completionSource: vi.fn(),
+                enableLanguageDataAutocomplete: { of: vi.fn() },
+                noteIdFacet: {},
+                setNoteIdEffect: {},
+            },
+        };
+
+        createContentScript().plugin(codeMirrorWrapper);
+
+        expect(extensionGroups).toHaveLength(1);
+        expect(extensionGroups[0]).toEqual(
+            expect.arrayContaining([legacyTaskListCheckboxTheme, wrappedLineIndentExtension] as unknown[])
+        );
     });
 
     it('decorates list lines using measured editor padding and prefix width', () => {
@@ -367,7 +367,12 @@ describe('wrappedLineIndentExtension', () => {
             const cursor = view.state.selection.main.head;
             const revealsCheckboxMarkup = cursor >= checkboxFrom && cursor <= checkboxTo;
             const prefixWidth = revealsCheckboxMarkup ? 56 : 32;
-            const left = position <= line.from + 1 ? 0 : position <= prefixTo ? prefixWidth : prefixWidth + 8;
+            let left = prefixWidth + 8;
+            if (position <= line.from + 1) {
+                left = 0;
+            } else if (position <= prefixTo) {
+                left = prefixWidth;
+            }
             return { left, right: left, top: 0, bottom: 16 };
         });
 
