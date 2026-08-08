@@ -201,12 +201,16 @@ function estimatePrefixWidth(prefix: string, view: EditorView, spaceCharacterWid
     let width = 0;
 
     for (let index = 0; index < prefix.length; index++) {
-        width +=
-            prefix[index] === '\t'
-                ? getTabReplacementWidth(prefix.slice(0, index), view.state.tabSize, characterWidth)
-                : prefix[index] === ' '
-                  ? (spaceCharacterWidth ?? characterWidth)
-                  : characterWidth;
+        const character = prefix[index];
+        let widthIncrement = characterWidth;
+
+        if (character === '\t') {
+            widthIncrement = getTabReplacementWidth(prefix.slice(0, index), view.state.tabSize, characterWidth);
+        } else if (character === ' ') {
+            widthIncrement = spaceCharacterWidth ?? characterWidth;
+        }
+
+        width += widthIncrement;
     }
 
     return width;
