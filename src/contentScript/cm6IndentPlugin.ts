@@ -18,7 +18,7 @@ import {
     WidgetType,
 } from '@codemirror/view';
 import type { SyntaxNode } from '@lezer/common';
-import type { CodeMirrorControl } from 'api/types';
+import type { CodeMirrorControl, MarkdownEditorContentScriptModule } from 'api/types';
 
 const WRAPPED_LINE_CLASS = 'cm-wrapped-line-indent';
 const TASK_LIST_CHECKBOX_PATTERN = /\[[ xX]\]/;
@@ -687,7 +687,7 @@ export const legacyTaskListCheckboxTheme = EditorView.theme({
     },
 });
 
-export default () => {
+export default (): MarkdownEditorContentScriptModule => {
     return {
         plugin: (codeMirrorWrapper: CodeMirrorControl) => {
             if (!codeMirrorWrapper.cm6) {
