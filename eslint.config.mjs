@@ -25,7 +25,6 @@ export default defineConfig(
             globals: globals.node,
         },
         rules: {
-            'no-useless-escape': 'off',
             '@typescript-eslint/no-inferrable-types': 'error',
             '@typescript-eslint/explicit-module-boundary-types': 'error',
         },
