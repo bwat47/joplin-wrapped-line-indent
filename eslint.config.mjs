@@ -10,7 +10,7 @@ import globals from 'globals';
 
 export default defineConfig(
     {
-        ignores: ['api/**', 'dist/**', 'webpack.config.js'],
+        ignores: ['api/**', 'dist/**', 'webpack.config.js', '.prettierrc.js'],
     },
 
     // Project TS/JS sources
