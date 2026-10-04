@@ -26,8 +26,6 @@ type MeasurableEditorView = EditorView & {
 describe('wrappedLineIndentExtension', () => {
     let frameCallbacks: Map<number, FrameRequestCallback>;
     let nextFrameId: number;
-    let originalRequestAnimationFrame: typeof window.requestAnimationFrame;
-    let originalCancelAnimationFrame: typeof window.cancelAnimationFrame;
     let coordsAtPosSpy: MockInstance<EditorView['coordsAtPos']>;
     let styleElement: HTMLStyleElement;
 
@@ -66,20 +64,15 @@ describe('wrappedLineIndentExtension', () => {
     beforeEach(() => {
         frameCallbacks = new Map();
         nextFrameId = 1;
-        originalRequestAnimationFrame = window.requestAnimationFrame;
-        originalCancelAnimationFrame = window.cancelAnimationFrame;
 
-        window.requestAnimationFrame = ((callback: FrameRequestCallback): number => {
+        vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback): number => {
             const frameId = nextFrameId++;
             frameCallbacks.set(frameId, callback);
             return frameId;
-        }) as typeof window.requestAnimationFrame;
-        window.cancelAnimationFrame = ((frameId: number): void => {
+        });
+        vi.stubGlobal('cancelAnimationFrame', (frameId: number): void => {
             frameCallbacks.delete(frameId);
-        }) as typeof window.cancelAnimationFrame;
-
-        global.requestAnimationFrame = window.requestAnimationFrame;
-        global.cancelAnimationFrame = window.cancelAnimationFrame;
+        });
 
         coordsAtPosSpy = vi.spyOn(EditorView.prototype, 'coordsAtPos').mockImplementation((position) => {
             const left = position * 8;
@@ -96,10 +89,7 @@ describe('wrappedLineIndentExtension', () => {
         styleElement.remove();
         document.body.replaceChildren();
         frameCallbacks.clear();
-        window.requestAnimationFrame = originalRequestAnimationFrame;
-        window.cancelAnimationFrame = originalCancelAnimationFrame;
-        global.requestAnimationFrame = originalRequestAnimationFrame;
-        global.cancelAnimationFrame = originalCancelAnimationFrame;
+        vi.unstubAllGlobals();
     });
 
     it('registers the legacy task-list checkbox theme with the plugin', () => {
