@@ -62,7 +62,7 @@ class TabWidget extends WidgetType {
         super();
     }
 
-    public eq(other: WidgetType): boolean {
+    public override eq(other: WidgetType): boolean {
         return other instanceof TabWidget && other.width === this.width;
     }
 
@@ -74,7 +74,7 @@ class TabWidget extends WidgetType {
         return element;
     }
 
-    public ignoreEvent(): boolean {
+    public override ignoreEvent(): boolean {
         return false;
     }
 }
