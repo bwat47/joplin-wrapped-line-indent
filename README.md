@@ -55,3 +55,18 @@ npm test
 npm run lint
 npm run dist
 ```
+
+Browser layout tests run the extension in a real CodeMirror editor using headless Chromium:
+
+```bash
+npx playwright install chromium
+npm run test:browser
+```
+
+Use `npm run test:browser:watch` to inspect the tests in a visible browser. On Linux CI, use
+`npx playwright install --with-deps chromium` to install browser system dependencies as well.
+
+The browser suite uses bundled Roboto and Roboto Mono fonts and DOM range measurements to verify
+wrapped-line alignment within one CSS pixel. It covers Markdown prefixes, tabs and mixed whitespace,
+font changes, resizing, edits, scrolling, tab-widget editing, and code-block exclusions. A simulated
+hidden quote marker exercises markup visibility changes.

@@ -5,6 +5,8 @@ docs/ARCHITECTURE.md
 ## Build, Test, and Development Commands
 
 - `npm run dist` Build plugin and create archive at `publish/*.jpl`.
+- `npm test` Run unit tests in jsdom.
+- `npm run test:browser` Run layout tests in headless Chromium (requires `npx playwright install chromium`).
 - `npm run lint` Lint TypeScript with ESLint.
 - `npm run lint:fix` Auto-fix lint issues.
 - `npm run format` Format code with Prettier.

@@ -44,6 +44,13 @@ export default defineConfig(
         },
     },
 
+    {
+        files: ['**/*.browser.test.ts'],
+        rules: {
+            'vitest/expect-expect': ['error', { assertFunctionNames: ['expect', 'expectAligned'] }],
+        },
+    },
+
     // Prettier compatibility
     prettier
 );
