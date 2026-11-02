@@ -82,15 +82,24 @@ function contentRows(view: EditorView, lineNumber: number): DOMRect[] {
     const prefix = parseIndentPrefix(line.text);
     const rows: DOMRect[] = [];
     for (let offset = prefix?.text.length ?? 0; offset < line.length; offset++) {
-        if (/\s/.test(line.text[offset])) {
+        if (/\s/.test(line.text.charAt(offset))) {
             continue;
         }
         const rect = characterRect(view, line.from + offset);
-        if (rect.width > 0 && (!rows.length || Math.abs(rect.top - rows[rows.length - 1].top) > 1)) {
+        const previousRow = rows[rows.length - 1];
+        if (rect.width > 0 && (!previousRow || Math.abs(rect.top - previousRow.top) > 1)) {
             rows.push(rect);
         }
     }
     return rows;
+}
+
+function firstContentRow(view: EditorView, lineNumber: number): DOMRect {
+    const first = contentRows(view, lineNumber)[0];
+    if (!first) {
+        throw new Error(`Expected at least one visible content row on line ${lineNumber}.`);
+    }
+    return first;
 }
 
 /**
@@ -106,10 +115,11 @@ async function expectAligned(
     await expect
         .poll(() => {
             const rows = contentRows(view, lineNumber);
-            if (rows.length < 2) {
+            const first = rows[0];
+            if (!first || rows.length < 2) {
                 return false;
             }
-            return rows.slice(1).every((row) => Math.abs(row.left - rows[0].left) <= 1);
+            return rows.slice(1).every((row) => Math.abs(row.left - first.left) <= 1);
         })
         .toBe(true);
 
@@ -123,7 +133,7 @@ async function expectAligned(
     // actual first tab box when the prefix starts with a replacement.
     const first = line.text.startsWith('\t')
         ? lineElement!.querySelector('.cm-tab')!.getBoundingClientRect()
-        : (prefixRects.find((rect) => rect.width > 0) ?? contentRows(view, lineNumber)[0]);
+        : (prefixRects.find((rect) => rect.width > 0) ?? firstContentRow(view, lineNumber));
     const contentLeft = lineElement!.getBoundingClientRect().left + lineElement!.clientLeft + linePadding;
     expect(Math.abs(first.left - contentLeft)).toBeLessThanOrEqual(1);
 }
@@ -173,11 +183,11 @@ describe('hanging indentation in Chromium', () => {
             extensions: [font.of(Prec.high(EditorView.theme({ '.cm-scroller': { fontFamily: '"Roboto"' } })))],
         });
         await expectAligned(view);
-        const before = contentRows(view, 1)[0].left;
+        const before = firstContentRow(view, 1).left;
         view.dispatch({
             effects: font.reconfigure(Prec.high(EditorView.theme({ '.cm-scroller': { fontFamily: '"Roboto Mono"' } }))),
         });
-        await expect.poll(() => Math.abs(contentRows(view, 1)[0].left - before)).toBeGreaterThan(1);
+        await expect.poll(() => Math.abs(firstContentRow(view, 1).left - before)).toBeGreaterThan(1);
         await expectAligned(view);
     });
 
@@ -264,9 +274,9 @@ describe('hanging indentation in Chromium', () => {
             extensions: [markup.of(EditorView.decorations.of(Decoration.set([hiddenMarker])))],
         });
         await expectAligned(view);
-        const hiddenLeft = contentRows(view, 1)[0].left;
+        const hiddenLeft = firstContentRow(view, 1).left;
         view.dispatch({ effects: markup.reconfigure([]) });
-        await expect.poll(() => contentRows(view, 1)[0].left - hiddenLeft).toBeGreaterThan(1);
+        await expect.poll(() => firstContentRow(view, 1).left - hiddenLeft).toBeGreaterThan(1);
         await expectAligned(view);
     });
 
