@@ -282,16 +282,17 @@ export function isFullDocumentReplace(transaction: Transaction): boolean {
 
     const docLength = transaction.startState.doc.length;
     let changeCount = 0;
-    let replacedWholeDocument = false;
+    // Counter (not boolean) because TS doesn't track assignments inside the callback
+    let fullDocumentChangeCount = 0;
 
     transaction.changes.iterChanges((fromA, toA) => {
         changeCount++;
-        if (changeCount === 1 && fromA === 0 && toA === docLength) {
-            replacedWholeDocument = true;
+        if (fromA === 0 && toA === docLength) {
+            fullDocumentChangeCount++;
         }
     });
 
-    return replacedWholeDocument && changeCount === 1;
+    return fullDocumentChangeCount === 1 && changeCount === 1;
 }
 
 class WrappedLineIndentPlugin implements PluginValue {
