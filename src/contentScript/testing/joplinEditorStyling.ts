@@ -35,7 +35,7 @@ interface JoplinStylingOptions {
 
 function lineDecorations(view: EditorView, from: number, to: number, decoration: Decoration): Range<Decoration>[] {
     const ranges: Range<Decoration>[] = [];
-    for (let position = from; position <= to; ) {
+    for (let position = from; position <= to;) {
         const line = view.state.doc.lineAt(position);
         ranges.push(decoration.range(line.from));
         position = line.to + 1;
