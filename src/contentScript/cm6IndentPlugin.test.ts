@@ -1,5 +1,5 @@
-import { markdown } from '@codemirror/lang-markdown';
-import { forceParsing } from '@codemirror/language';
+import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
+import { forceParsing, syntaxTreeAvailable } from '@codemirror/language';
 import { Compartment, EditorState, StateEffect } from '@codemirror/state';
 import type { ChangeSpec, Extension } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
@@ -11,7 +11,7 @@ import {
     default as createContentScript,
     getLineDecorationStyle,
     isFullDocumentReplace,
-    parseIndentPrefix,
+    findIndentPrefix,
     getTabReplacementWidth,
     isBlockCodeNode,
     isHorizontalRuleNode,
@@ -51,7 +51,7 @@ describe('wrappedLineIndentExtension', () => {
             parent,
             state: EditorState.create({
                 doc,
-                extensions: [...extensions, wrappedLineIndentExtension],
+                extensions: [markdown({ base: markdownLanguage }), ...extensions, wrappedLineIndentExtension],
             }),
         });
         for (const lineElement of view.dom.querySelectorAll<HTMLElement>('.cm-line')) {
@@ -562,7 +562,8 @@ describe('wrappedLineIndentExtension', () => {
     });
 
     it('uses cached measured space width for a newly deeper space indent', () => {
-        const view = createView('  first item');
+        // Stays below four spaces so the line remains a paragraph, not an indented code block.
+        const view = createView(' first item');
 
         Object.defineProperty(view, 'defaultCharacterWidth', {
             configurable: true,
@@ -580,17 +581,17 @@ describe('wrappedLineIndentExtension', () => {
 
         flushMeasureCycle(view);
         flushMeasureCycle(view);
-        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('22px');
+        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('16px');
 
         view.dispatch({
             changes: { from: view.state.doc.line(1).from, insert: '  ' },
         });
 
-        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('34px');
+        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('28px');
 
         flushMeasureCycle(view);
         flushMeasureCycle(view);
-        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('34px');
+        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('28px');
 
         view.destroy();
     });
@@ -647,19 +648,22 @@ describe('wrappedLineIndentExtension', () => {
 
     it('remeasures cached tab prefix widths when tab size changes', () => {
         const tabSize = new Compartment();
-        const view = createView('\tindented paragraph', [tabSize.of(EditorState.tabSize.of(4))]);
+        // A top-level leading tab is an indented code block, so indent a list continuation instead.
+        const view = createView('- item\n\tcontinuation paragraph', [tabSize.of(EditorState.tabSize.of(4))]);
         coordsAtPosSpy.mockImplementation((position) => {
-            const left = position === view.state.doc.line(1).from ? 0 : view.state.tabSize * 8;
+            const left = position === view.state.doc.lineAt(position).from ? 0 : view.state.tabSize * 8;
             return { left, right: left, top: 0, bottom: 16 };
         });
+        const continuationPadding = () =>
+            view.dom.querySelectorAll<HTMLElement>('.cm-wrapped-line-indent')[1]?.style.paddingLeft;
 
         flushMeasureCycle(view);
-        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('42px');
+        expect(continuationPadding()).toBe('42px');
 
         view.dispatch({ effects: tabSize.reconfigure(EditorState.tabSize.of(8)) });
         flushMeasureCycle(view);
 
-        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('74px');
+        expect(continuationPadding()).toBe('74px');
 
         view.destroy();
     });
@@ -858,36 +862,52 @@ describe('isFullDocumentReplace', () => {
     });
 });
 
-describe('parseIndentPrefix', () => {
-    it('captures quoted list metadata', () => {
-        expect(parseIndentPrefix('> - quoted item')).toEqual({
-            text: '> - ',
-        });
-        expect(parseIndentPrefix('> > 12. nested quoted item')).toEqual({
-            text: '> > 12. ',
-        });
-        expect(parseIndentPrefix('> * [x] quoted task')).toEqual({
-            text: '> * [x] ',
-        });
+describe('findIndentPrefix', () => {
+    const prefixTexts = (doc: string): (string | null)[] => {
+        const state = EditorState.create({ doc, extensions: [markdown({ base: markdownLanguage })] });
+        return Array.from(
+            { length: state.doc.lines },
+            (_, index) => findIndentPrefix(state, state.doc.line(index + 1))?.text ?? null
+        );
+    };
+
+    it('captures quoted list prefixes', () => {
+        expect(prefixTexts('> - quoted item')).toEqual(['> - ']);
+        expect(prefixTexts('> > 12. nested quoted item')).toEqual(['> > 12. ']);
+        expect(prefixTexts('> * [x] quoted task')).toEqual(['> * [x] ']);
     });
 
-    it('captures quote-only, list, and indentation metadata', () => {
-        expect(parseIndentPrefix('> quoted text')).toEqual({
-            text: '> ',
-        });
-        expect(parseIndentPrefix('> > nested quoted text')).toEqual({
-            text: '> > ',
-        });
-        expect(parseIndentPrefix('- [ ] task item')).toEqual({
-            text: '- [ ] ',
-        });
-        expect(parseIndentPrefix('    indented paragraph')).toEqual({
-            text: '    ',
-        });
+    it('captures quote, list, task, and indentation prefixes', () => {
+        expect(prefixTexts('> quoted text')).toEqual(['> ']);
+        expect(prefixTexts('> > nested quoted text')).toEqual(['> > ']);
+        expect(prefixTexts('- [ ] task item')).toEqual(['- [ ] ']);
+        expect(prefixTexts('- item\n  - [x] nested task')).toEqual(['- ', '  - [x] ']);
+        expect(prefixTexts('   indented paragraph')).toEqual(['   ']);
+    });
+
+    it('ignores marker-like text that the parser does not treat as a marker', () => {
+        expect(prefixTexts('- - -')).toEqual([null]);
+        expect(prefixTexts('-not a list item')).toEqual([null]);
     });
 
     it('returns null when a line has no indent prefix', () => {
-        expect(parseIndentPrefix('plain paragraph')).toBeNull();
+        expect(prefixTexts('plain paragraph')).toEqual([null]);
+    });
+
+    it('returns null for lines the parser has not reached', () => {
+        const state = EditorState.create({
+            doc: `${'plain paragraph\n\n'.repeat(2000)}- item`,
+            extensions: [markdown({ base: markdownLanguage })],
+        });
+
+        expect(syntaxTreeAvailable(state)).toBe(false);
+        expect(findIndentPrefix(state, state.doc.line(state.doc.lines))).toBeNull();
+    });
+
+    it('returns null without a Markdown parser', () => {
+        const state = EditorState.create({ doc: '- item' });
+
+        expect(findIndentPrefix(state, state.doc.line(1))).toBeNull();
     });
 });
 
