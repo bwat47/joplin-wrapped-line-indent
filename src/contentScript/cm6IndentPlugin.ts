@@ -638,6 +638,13 @@ class WrappedLineIndentPlugin implements PluginValue {
 
 export const wrappedLineIndentExtension = ViewPlugin.fromClass(WrappedLineIndentPlugin, {
     decorations: (plugin) => plugin.decorations,
+    provide: () =>
+        EditorView.theme({
+            // Inline blocks, such as Joplin's hidden markup, inherit the line's negative
+            // text-indent, which shifts their glyphs and distorts coordsAtPos.
+            // :where() keeps specificity low so widgets can still set their own indent.
+            [`& :where(.${WRAPPED_LINE_CLASS} *)`]: { textIndent: '0' },
+        }),
 });
 
 export const legacyTaskListCheckboxTheme = EditorView.theme({

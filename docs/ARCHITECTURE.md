@@ -11,6 +11,8 @@ Wrapped visual lines align with the end of a Markdown prefix through a line deco
 
 This keeps the first visual line at the editor margin while wrapped visual lines start after the Markdown prefix.
 
+The extension resets `text-indent` on all descendants of decorated lines (at zero specificity via `:where()`). Inline blocks such as Joplin's scaled `.cm-hidden` markup otherwise inherit the negative line indent, shifting their glyph coordinates and inflating measured prefix widths.
+
 To ensure accurate values for the indentation padding, the plugin measures the exact rendered pixel width of each line's prefix (list marker, blockquote chevron, whitespace, etc.) from the DOM.
 
 ### 2. Prefix Detection and Decoration Lifecycle

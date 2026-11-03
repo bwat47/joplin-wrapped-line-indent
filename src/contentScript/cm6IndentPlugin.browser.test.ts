@@ -359,6 +359,35 @@ describe('hanging indentation with Joplin editor styling', () => {
 
     it.each(
         ['"Roboto"', '"Roboto Mono"'].flatMap((font) =>
+            ['> ', '> - ', '> - [ ] ', '>   - [ ] '].map((prefix) => ({ font, prefix }))
+        )
+    )('aligns $prefix with a hidden quote marker in $font', async ({ font, prefix }) => {
+        const markup = new Compartment();
+        const view = joplinView(prefix + CONTENT, font, [
+            // Joplin's makeHideReplaceExtension.ts keeps the quote text inside a
+            // scaled inline block. Unlike Decoration.replace, this element inherits the
+            // line's text-indent.
+            markup.of(EditorView.decorations.of(Decoration.set([Decoration.mark({ class: 'cm-hidden' }).range(0, 1)]))),
+            EditorView.theme({
+                '& .cm-hidden': {
+                    width: '1px',
+                    height: '1em',
+                    marginRight: '-0.9px',
+                    opacity: '0',
+                    display: 'inline-block',
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    transform: 'scale(0.1, 1)',
+                },
+            }),
+        ]);
+        await expectAligned(view);
+        view.dispatch({ effects: markup.reconfigure([]) });
+        await expectAligned(view);
+    });
+
+    it.each(
+        ['"Roboto"', '"Roboto Mono"'].flatMap((font) =>
             ['- ', '123. ', '> ', '> > '].map((prefix) => ({ font, prefix }))
         )
     )('aligns wrapped content after $prefix in $font', async ({ font, prefix }) => {
