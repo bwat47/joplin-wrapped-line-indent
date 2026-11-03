@@ -22,7 +22,6 @@ import type { CodeMirrorControl, MarkdownEditorContentScriptModule } from 'api/t
 
 const WRAPPED_LINE_CLASS = 'cm-wrapped-line-indent';
 const TASK_LIST_CHECKBOX_PATTERN = /\[[ xX]\]/;
-const LEGACY_TASK_MARKER_SELECTOR = '.cm-ext-checkbox-toggle.cm-taskMarker';
 const INDENT_PREFIX_MARK_NODES = new Set(['QuoteMark', 'ListMark', 'TaskMarker']);
 
 const measurementsChanged = StateEffect.define<void>();
@@ -647,37 +646,6 @@ export const wrappedLineIndentExtension = ViewPlugin.fromClass(WrappedLineIndent
         }),
 });
 
-export const legacyTaskListCheckboxTheme = EditorView.theme({
-    [`& ${LEGACY_TASK_MARKER_SELECTOR}`]: {
-        alignItems: 'center',
-        display: 'inline-flex',
-        position: 'static',
-        verticalAlign: 'middle',
-
-        '& > .sizing': {
-            display: 'none',
-        },
-
-        '& > .content': {
-            bottom: 'auto',
-            display: 'inline-flex',
-            left: 'auto',
-            position: 'static',
-            right: 'auto',
-            textAlign: 'initial',
-            top: 'auto',
-        },
-
-        '& > .content > input.cm-ext-checkbox': {
-            height: '1.1em',
-            margin: '4px',
-            minHeight: '0',
-            verticalAlign: 'middle',
-            width: '1.1em',
-        },
-    },
-});
-
 export default (): MarkdownEditorContentScriptModule => {
     return {
         plugin: (codeMirrorWrapper: CodeMirrorControl) => {
@@ -685,7 +653,7 @@ export default (): MarkdownEditorContentScriptModule => {
                 return;
             }
 
-            codeMirrorWrapper.addExtension([legacyTaskListCheckboxTheme, wrappedLineIndentExtension]);
+            codeMirrorWrapper.addExtension(wrappedLineIndentExtension);
         },
     };
 };

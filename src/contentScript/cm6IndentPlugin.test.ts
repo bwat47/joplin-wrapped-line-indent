@@ -15,7 +15,6 @@ import {
     getTabReplacementWidth,
     isBlockCodeNode,
     isHorizontalRuleNode,
-    legacyTaskListCheckboxTheme,
     wrappedLineIndentExtension,
 } from './cm6IndentPlugin';
 
@@ -92,7 +91,7 @@ describe('wrappedLineIndentExtension', () => {
         vi.unstubAllGlobals();
     });
 
-    it('registers the legacy task-list checkbox theme with the plugin', () => {
+    it('registers the wrapped-line indent extension with the plugin', () => {
         const extensionGroups: unknown[] = [];
         const codeMirrorWrapper: CodeMirrorControl = {
             cm6: {} as EditorView,
@@ -114,9 +113,7 @@ describe('wrappedLineIndentExtension', () => {
         createContentScript().plugin(codeMirrorWrapper);
 
         expect(extensionGroups).toHaveLength(1);
-        expect(extensionGroups[0]).toEqual(
-            expect.arrayContaining([legacyTaskListCheckboxTheme, wrappedLineIndentExtension] as unknown[])
-        );
+        expect(extensionGroups[0]).toBe(wrappedLineIndentExtension);
     });
 
     it('decorates list lines using measured editor padding and prefix width', () => {
