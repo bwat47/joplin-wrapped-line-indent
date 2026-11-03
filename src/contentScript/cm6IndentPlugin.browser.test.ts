@@ -4,14 +4,14 @@ import '@fontsource/roboto-mono/latin-400.css';
 
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
-import { forceParsing } from '@codemirror/language';
+import { forceParsing, syntaxTreeAvailable } from '@codemirror/language';
 import { Compartment, EditorState, Prec } from '@codemirror/state';
 import type { Extension } from '@codemirror/state';
 import { Decoration, EditorView, keymap, lineNumbers } from '@codemirror/view';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { userEvent } from 'vitest/browser';
 
-import { parseIndentPrefix, wrappedLineIndentExtension } from './cm6IndentPlugin';
+import { findIndentPrefix, wrappedLineIndentExtension } from './cm6IndentPlugin';
 import {
     CODEMIRROR_LINE_PADDING,
     JOPLIN_BLOCK_QUOTE_PADDING,
@@ -56,6 +56,7 @@ function createView(doc: string, options: FixtureOptions = {}): EditorView {
                         },
                         '.cm-line': { padding: `0 ${BASE_PADDING}px` },
                     }),
+                markdown({ base: markdownLanguage }),
                 ...(options.extensions ?? []),
                 wrappedLineIndentExtension,
             ],
@@ -79,7 +80,7 @@ function characterRect(view: EditorView, position: number): DOMRect {
 /** Collect the first non-whitespace glyph on each visual row, including the first. */
 function contentRows(view: EditorView, lineNumber: number): DOMRect[] {
     const line = view.state.doc.line(lineNumber);
-    const prefix = parseIndentPrefix(line.text);
+    const prefix = findIndentPrefix(view.state, line);
     const rows: DOMRect[] = [];
     for (let offset = prefix?.text.length ?? 0; offset < line.length; offset++) {
         if (/\s/.test(line.text.charAt(offset))) {
@@ -102,9 +103,18 @@ function firstContentRow(view: EditorView, lineNumber: number): DOMRect {
     return first;
 }
 
+function isLineDecorated(view: EditorView, lineNumber: number): boolean {
+    const line = view.state.doc.line(lineNumber);
+    // domAtPos can return the line element itself next to a replacement widget.
+    const { node } = view.domAtPos(line.from + 1);
+    const lineElement = (node instanceof Element ? node : node.parentElement)?.closest('.cm-line');
+    return lineElement?.classList.contains('cm-wrapped-line-indent') ?? false;
+}
+
 /**
- * Expect wrapped rows to align with the first row's content, and the first row to start
- * where it would without the plugin: after the line's border and `linePadding`.
+ * Expect the line to carry the hanging indent, wrapped rows to align with the first row's
+ * content, and the first row to start where it would without the plugin: after the line's
+ * border and `linePadding`.
  */
 async function expectAligned(
     view: EditorView,
@@ -114,6 +124,10 @@ async function expectAligned(
     // Poll real layout; do not mock frames, invoke CodeMirror internals, or use fixed sleeps.
     await expect
         .poll(() => {
+            // An undecorated line wraps to the margin, which also looks aligned when no prefix is found.
+            if (!isLineDecorated(view, lineNumber)) {
+                return false;
+            }
             const rows = contentRows(view, lineNumber);
             const first = rows[0];
             if (!first || rows.length < 2) {
@@ -124,7 +138,7 @@ async function expectAligned(
         .toBe(true);
 
     const line = view.state.doc.line(lineNumber);
-    const prefixLength = parseIndentPrefix(line.text)?.text.length ?? 0;
+    const prefixLength = findIndentPrefix(view.state, line)?.text.length ?? 0;
     const contentNode = view.domAtPos(line.from + prefixLength + 1).node;
     const lineElement = contentNode.parentElement?.closest('.cm-line');
     expect(lineElement).not.toBeNull();
@@ -156,7 +170,7 @@ afterEach(() => {
 
 describe('hanging indentation in Chromium', () => {
     it.each(['- ', '123. ', '- [ ] ', '> > ', '> - '])('aligns wrapped content after %j', async (prefix) => {
-        await expectAligned(createView(prefix + CONTENT, { extensions: [markdown()] }));
+        await expectAligned(createView(prefix + CONTENT));
     });
 
     it.each([
@@ -165,13 +179,12 @@ describe('hanging indentation in Chromium', () => {
         { tabSize: 4, font: '"Roboto"' },
         { tabSize: 8, font: '"Roboto"' },
     ])('aligns tabs and mixed whitespace with tab size $tabSize in $font', async ({ tabSize, font }) => {
-        // These raw indented paragraphs intentionally omit Markdown parsing, which would
-        // classify a leading tab as an excluded code block.
-        const view = createView(['\t', ' \t', '\t-\t'].map((prefix) => prefix + CONTENT).join('\n'), {
+        // A top-level leading tab starts an indented code block, so indent list content instead.
+        const view = createView(['- parent', ...['\t', ' \t', '\t-\t'].map((prefix) => prefix + CONTENT)].join('\n'), {
             font,
             extensions: [EditorState.tabSize.of(tabSize)],
         });
-        for (let line = 1; line <= 3; line++) {
+        for (let line = 2; line <= 4; line++) {
             view.dispatch({ effects: EditorView.scrollIntoView(view.state.doc.line(line).from) });
             await expectAligned(view, line);
         }
@@ -201,33 +214,37 @@ describe('hanging indentation in Chromium', () => {
     });
 
     it('allows clicking, moving across, deleting, and undoing a tab widget', async () => {
-        const original = '\t' + CONTENT;
+        const parent = '- parent\n';
+        const original = parent + '\t' + CONTENT;
+        const tabFrom = parent.length;
         const view = createView(original, {
             extensions: [history(), keymap.of([...defaultKeymap, ...historyKeymap])],
         });
-        await expectAligned(view);
+        await expectAligned(view, 2);
         const tab = view.contentDOM.querySelector<HTMLElement>('.cm-tab');
         expect(tab).not.toBeNull();
         await userEvent.click(tab!);
         expect(view.hasFocus).toBe(true);
-        expect(view.state.selection.main.head).toBeLessThanOrEqual(1);
+        expect(view.state.selection.main.head).toBeGreaterThanOrEqual(tabFrom);
+        expect(view.state.selection.main.head).toBeLessThanOrEqual(tabFrom + 1);
 
-        view.dispatch({ selection: { anchor: 0 } });
+        view.dispatch({ selection: { anchor: tabFrom } });
         await userEvent.keyboard('{ArrowRight}');
-        expect(view.state.selection.main.head).toBe(1);
+        expect(view.state.selection.main.head).toBe(tabFrom + 1);
         await userEvent.keyboard('{ArrowLeft}');
-        expect(view.state.selection.main.head).toBe(0);
+        expect(view.state.selection.main.head).toBe(tabFrom);
         await userEvent.keyboard('{ArrowRight}{Backspace}');
-        expect(view.state.doc.toString()).toBe(CONTENT);
+        expect(view.state.doc.toString()).toBe(parent + CONTENT);
         await expect.poll(() => view.contentDOM.querySelector('.cm-tab')).toBeNull();
         const modifier = navigator.userAgent.includes('Mac') ? 'Meta' : 'Control';
         await userEvent.keyboard(`{${modifier}>}z{/${modifier}}`);
         expect(view.state.doc.toString()).toBe(original);
-        await expectAligned(view);
+        await expectAligned(view, 2);
     });
 
     it('keeps shifted list items aligned after inserting text before them', async () => {
-        const view = createView('Heading\n- ' + CONTENT + '\n123. ' + CONTENT);
+        // `1.` because CommonMark only lets an ordered list starting at 1 interrupt a paragraph.
+        const view = createView('Heading\n- ' + CONTENT + '\n1. ' + CONTENT);
         await expectAligned(view, 2);
         view.dispatch({ changes: { from: 0, insert: 'New heading\n' } });
         await expectAligned(view, 3);
@@ -266,6 +283,33 @@ describe('hanging indentation in Chromium', () => {
         await expectAligned(view);
     });
 
+    it('decorates list lines beyond the initial parse once parsing reaches them', async () => {
+        const doc = 'plain paragraph\n\n'.repeat(3000) + '- ' + CONTENT;
+        const view = createView(doc);
+        const lastLine = view.state.doc.lines;
+        expect(syntaxTreeAvailable(view.state)).toBe(false);
+        view.dispatch({ effects: EditorView.scrollIntoView(doc.length, { y: 'end' }) });
+        await expectAligned(view, lastLine);
+    });
+
+    it('decorates the list line after a large paste once parsing catches up', async () => {
+        const doc = Array.from({ length: 200 }, () => '- ' + CONTENT).join('\n');
+        const view = createView(doc);
+        view.dispatch({ effects: EditorView.scrollIntoView(doc.length, { y: 'end' }) });
+        await expectAligned(view, view.state.doc.lines);
+
+        // Paste above the last list line with the cursor after it, as a user would. Reparsing
+        // this much text exceeds the synchronous parse budget, so the idle parse finishes it.
+        const paste = 'Pasted paragraph with *emphasis* and `code`.\n\n'.repeat(20000);
+        const from = view.state.doc.line(view.state.doc.lines).from;
+        view.dispatch({
+            changes: { from, insert: paste },
+            selection: { anchor: from + paste.length },
+            scrollIntoView: true,
+        });
+        await expectAligned(view, view.state.doc.lines);
+    });
+
     it('remeasures a hidden quote marker when an effect reveals it', async () => {
         // Simulates render-markup replacement; actual Joplin widgets still need app-level testing.
         const markup = new Compartment();
@@ -281,9 +325,7 @@ describe('hanging indentation in Chromium', () => {
     });
 
     it('leaves fenced and indented code without hanging indentation', async () => {
-        const view = createView('```\n- ' + CONTENT + '\n```\n\n    ' + CONTENT, {
-            extensions: [markdown()],
-        });
+        const view = createView('```\n- ' + CONTENT + '\n```\n\n    ' + CONTENT);
         forceParsing(view, view.state.doc.length);
         for (const lineNumber of [2, 5]) {
             view.dispatch({ effects: EditorView.scrollIntoView(view.state.doc.line(lineNumber).from) });
@@ -312,7 +354,7 @@ describe('hanging indentation with Joplin editor styling', () => {
         createView(doc, {
             styling: joplinEditorStyling({ fontFamily, monospaceFont: '"Roboto Mono"' }),
             linePadding: JOPLIN_LINE_PADDING,
-            extensions: [markdown({ base: markdownLanguage }), ...extensions],
+            extensions,
         });
 
     it.each(

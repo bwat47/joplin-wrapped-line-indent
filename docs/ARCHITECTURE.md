@@ -15,7 +15,8 @@ To ensure accurate values for the indentation padding, the plugin measures the e
 
 ### 2. Prefix Detection and Decoration Lifecycle
 
-- **Visible range scan**: `buildDecorations` scans `view.visibleRanges`, parses each visible line with `parseIndentPrefix`, and decorates lines with prefixes.
+- **Visible range scan**: `buildDecorations` scans `view.visibleRanges`, finds each visible line's prefix with `findIndentPrefix`, and decorates lines with prefixes.
+- **Prefix detection**: `findIndentPrefix` walks the leading run of whitespace and `QuoteMark`, `ListMark`, and `TaskMarker` syntax nodes. Lines the parser has not reached yet (`syntaxTreeAvailable` is false) get no prefix; the syntax tree change rebuild decorates them once CodeMirror's background parse catches up. Without a Markdown language, no lines are decorated.
 - **Prefix metadata**: `ParsedIndentPrefix` records the raw prefix text used for measurement.
 - **Line measurement keys**: `getLineMeasurementKey` keys exact measurements by visible line position and prefix text.
 - **Syntax exclusions**: Lines inside `CodeBlock`, `FencedCode`, `CodeInfo`, or `HorizontalRule` syntax nodes are skipped.

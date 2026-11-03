@@ -23,7 +23,7 @@ import type { CodeMirrorControl, MarkdownEditorContentScriptModule } from 'api/t
 const WRAPPED_LINE_CLASS = 'cm-wrapped-line-indent';
 const TASK_LIST_CHECKBOX_PATTERN = /\[[ xX]\]/;
 const LEGACY_TASK_MARKER_SELECTOR = '.cm-ext-checkbox-toggle.cm-taskMarker';
-const LIST_PREFIX_PATTERN = /^([ \t]*(?:[-*+]|\d+[.)])[ \t]+(?:\[[ xX]\][ \t]+)?)/;
+const INDENT_PREFIX_MARK_NODES = new Set(['QuoteMark', 'ListMark', 'TaskMarker']);
 
 const measurementsChanged = StateEffect.define<void>();
 
@@ -84,53 +84,39 @@ export function getTabReplacementWidth(textBeforeTab: string, tabSize: number, c
     return (tabSize - (column % tabSize)) * characterWidth;
 }
 
-function parseListPrefix(lineText: string): string | null {
-    const text = LIST_PREFIX_PATTERN.exec(lineText)?.[1];
-    if (!text) {
+/**
+ * Finds the leading run of whitespace and Markdown marker nodes on a line.
+ * Lines the parser has not reached yet have no prefix until the syntax tree catches up.
+ *
+ * Examples:
+ * - `   text` → `   `
+ * - `  - item`, `  * [x] task`, `  12. item` → `  - `, `  * [x] `, `  12. `
+ * - `> > nested quote`, `> - item` → `> > `, `> - `
+ */
+export function findIndentPrefix(state: EditorState, line: Line): ParsedIndentPrefix | null {
+    if (!syntaxTreeAvailable(state, line.to)) {
         return null;
     }
 
-    return text;
-}
-
-/**
- * Prefix patterns:
- * - `   text`
- * - `  - item`, `  * [x] task`, `  12. item`, `  12) item`
- * - `> quote`, `> > nested quote`, including indentation before `>`
- * - `> - item`, `> > 1. nested item`, including the list marker after the quote prefix
- */
-export function parseIndentPrefix(lineText: string): ParsedIndentPrefix | null {
-    const blockquoteMatch = /^([ \t]*(?:>[ \t]*)+)/.exec(lineText);
-    if (blockquoteMatch?.[1]) {
-        const quotePrefix = blockquoteMatch[1];
-        const listPrefix = parseListPrefix(lineText.slice(quotePrefix.length));
-        if (listPrefix) {
-            return {
-                text: quotePrefix + listPrefix,
-            };
+    const tree = syntaxTree(state);
+    let offset = 0;
+    while (offset < line.length) {
+        const character = line.text[offset];
+        if (character === ' ' || character === '\t') {
+            offset++;
+            continue;
         }
 
-        return {
-            text: quotePrefix,
-        };
+        const position = line.from + offset;
+        const node = tree.resolveInner(position, 1);
+        if (!INDENT_PREFIX_MARK_NODES.has(node.name) || node.from !== position) {
+            break;
+        }
+
+        offset = node.to - line.from;
     }
 
-    const listPrefix = parseListPrefix(lineText);
-    if (listPrefix) {
-        return {
-            text: listPrefix,
-        };
-    }
-
-    const whitespaceMatch = /^([ \t]+)/.exec(lineText);
-    if (whitespaceMatch?.[1]) {
-        return {
-            text: whitespaceMatch[1],
-        };
-    }
-
-    return null;
+    return offset > 0 ? { text: line.text.slice(0, offset) } : null;
 }
 
 function intersectsFoldedRange(state: EditorState, from: number, to: number): boolean {
@@ -159,11 +145,8 @@ function isIndentExcludedNode(nodeName: string): boolean {
     return isBlockCodeNode(nodeName) || isHorizontalRuleNode(nodeName);
 }
 
+// Callers must check that the tree covers `to`; findIndentPrefix does this for its line.
 function isInIndentExcludedSyntax(state: EditorState, from: number, to: number): boolean {
-    if (!syntaxTreeAvailable(state, to)) {
-        return false;
-    }
-
     const tree = syntaxTree(state);
 
     for (const position of from === to ? [from] : [from, to]) {
@@ -438,7 +421,7 @@ class WrappedLineIndentPlugin implements PluginValue {
         line: Line,
         options: BuildDecorationsOptions
     ): string | null {
-        const prefix = parseIndentPrefix(line.text);
+        const prefix = findIndentPrefix(this.view.state, line);
         if (!prefix) {
             return null;
         }
