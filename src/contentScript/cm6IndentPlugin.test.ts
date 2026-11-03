@@ -189,7 +189,7 @@ describe('wrappedLineIndentExtension', () => {
         flushMeasureCycle(view);
         expect(
             [...view.dom.querySelectorAll<HTMLElement>('.cm-wrapped-line-indent')].map((line) => line.style.paddingLeft)
-        ).toEqual(['38px', '38px']);
+        ).toEqual(['42px', '42px']);
 
         view.dispatch({ selection: { anchor: view.state.doc.line(2).to } });
         flushMeasureCycle(view);
@@ -197,7 +197,10 @@ describe('wrappedLineIndentExtension', () => {
 
         expect(
             [...view.dom.querySelectorAll<HTMLElement>('.cm-wrapped-line-indent')].map((line) => line.style.paddingLeft)
-        ).toEqual(['22px', '38px']);
+        ).toEqual(['26px', '42px']);
+        expect(
+            [...view.dom.querySelectorAll<HTMLElement>('.cm-wrapped-line-indent')].map((line) => line.style.textIndent)
+        ).toEqual(['-16px', '-32px']);
 
         view.destroy();
     });
@@ -305,7 +308,7 @@ describe('wrappedLineIndentExtension', () => {
         flushMeasureCycle(view);
         expect(
             [...view.dom.querySelectorAll<HTMLElement>('.cm-wrapped-line-indent')].map((line) => line.style.paddingLeft)
-        ).toEqual(['54px', '54px']);
+        ).toEqual(['58px', '58px']);
 
         view.dispatch({ selection: { anchor: view.state.doc.line(2).to } });
         flushMeasureCycle(view);
@@ -313,7 +316,10 @@ describe('wrappedLineIndentExtension', () => {
 
         expect(
             [...view.dom.querySelectorAll<HTMLElement>('.cm-wrapped-line-indent')].map((line) => line.style.paddingLeft)
-        ).toEqual(['30px', '30px']);
+        ).toEqual(['34px', '34px']);
+        expect(
+            [...view.dom.querySelectorAll<HTMLElement>('.cm-wrapped-line-indent')].map((line) => line.style.textIndent)
+        ).toEqual(['-24px', '-24px']);
 
         view.destroy();
     });
@@ -339,7 +345,8 @@ describe('wrappedLineIndentExtension', () => {
         flushMeasureCycle(view);
         flushMeasureCycle(view);
 
-        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('30px');
+        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('34px');
+        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.textIndent).toBe('-24px');
 
         view.destroy();
     });
