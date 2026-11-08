@@ -13,3 +13,4 @@ publish/
 gemini/
 prompts/
 .vitest/
+.api-staging-*/
