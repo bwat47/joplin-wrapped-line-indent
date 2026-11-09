@@ -1,5 +1,4 @@
 {
-	"extraScripts": [
-        "contentScript/cm6IndentPlugin.ts"
-    ]
+    "extraScripts": ["contentScript/cm6IndentPlugin.ts"],
+    "buildOptions": { "target": "es2020" }
 }
