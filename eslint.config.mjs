@@ -13,13 +13,6 @@ export default defineConfig(
         ignores: ['api/**', 'dist/**', '.api-staging-*/**', '.prettierrc.js'],
     },
 
-    // Bundle tests run under node:test.
-    {
-        files: ['test/*.mjs'],
-        extends: [js.configs.recommended, sonarjs.configs.recommended],
-        languageOptions: { globals: globals.node },
-    },
-
     // Project TS/JS sources
     {
         files: ['**/*.{ts,tsx,js}'],

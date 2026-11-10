@@ -6,9 +6,9 @@ docs/ARCHITECTURE.md
 
 - `npm run dist` Typecheck, bundle with esbuild, and create archive at `publish/*.jpl`.
 - `npm run typecheck` Check TypeScript without producing output.
-- `npm test` Run unit tests in jsdom, then the bundle tests (`test/*.test.mjs`).
+- `npm test` Run unit tests in jsdom.
 - `npm run test:browser` Run layout tests in headless Chromium (requires `npx playwright install chromium`).
-- `npm run lint` Lint TypeScript and bundle tests with ESLint.
+- `npm run lint` Lint TypeScript with ESLint.
 - `npm run lint:fix` Auto-fix lint issues.
 - `npm run format` Format code with Prettier.
 - `npm run knip` Find unused dependencies, exports and files.
