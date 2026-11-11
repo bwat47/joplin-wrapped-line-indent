@@ -1,12 +1,12 @@
 // Flat config (ESM). Adds ignores, Node globals, and TS-friendly rule tweaks.
 
 import js from '@eslint/js';
-import { defineConfig } from 'eslint/config';
-import tseslint from 'typescript-eslint';
 import vitest from '@vitest/eslint-plugin';
-import sonarjs from 'eslint-plugin-sonarjs';
 import prettier from 'eslint-config-prettier';
+import sonarjs from 'eslint-plugin-sonarjs';
+import { defineConfig } from 'eslint/config';
 import globals from 'globals';
+import tseslint from 'typescript-eslint';
 
 export default defineConfig(
     {

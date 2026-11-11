@@ -1,8 +1,8 @@
 import { foldedRanges, syntaxTree, syntaxTreeAvailable } from '@codemirror/language';
 import {
+    countColumn,
     RangeSetBuilder,
     StateEffect,
-    countColumn,
     type EditorState,
     type Line,
     type Text,
@@ -10,14 +10,15 @@ import {
 } from '@codemirror/state';
 import {
     Decoration,
-    type DecorationSet,
     EditorView,
-    type PluginValue,
     ViewPlugin,
-    type ViewUpdate,
     WidgetType,
+    type DecorationSet,
+    type PluginValue,
+    type ViewUpdate,
 } from '@codemirror/view';
 import type { SyntaxNode } from '@lezer/common';
+
 import type { CodeMirrorControl, MarkdownEditorContentScriptModule } from 'api/types';
 
 const WRAPPED_LINE_CLASS = 'cm-wrapped-line-indent';

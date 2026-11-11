@@ -1,19 +1,17 @@
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { forceParsing, syntaxTreeAvailable } from '@codemirror/language';
-import { Compartment, EditorState, StateEffect } from '@codemirror/state';
-import type { ChangeSpec, Extension } from '@codemirror/state';
+import { Compartment, EditorState, StateEffect, type ChangeSpec, type Extension } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
-import type { CodeMirrorControl } from 'api/types';
-import { vi } from 'vitest';
-import type { MockInstance } from 'vitest';
+import { vi, type MockInstance } from 'vitest';
 
+import type { CodeMirrorControl } from 'api/types';
 import {
     default as createContentScript,
-    getLineDecorationStyle,
-    isFullDocumentReplace,
     findIndentPrefix,
+    getLineDecorationStyle,
     getTabReplacementWidth,
     isBlockCodeNode,
+    isFullDocumentReplace,
     isHorizontalRuleNode,
     wrappedLineIndentExtension,
 } from './cm6IndentPlugin';

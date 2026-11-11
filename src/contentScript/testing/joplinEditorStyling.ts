@@ -1,7 +1,6 @@
 import { syntaxTree } from '@codemirror/language';
 import type { Extension, Range } from '@codemirror/state';
-import { Decoration, EditorView, ViewPlugin } from '@codemirror/view';
-import type { DecorationSet, ViewUpdate } from '@codemirror/view';
+import { Decoration, EditorView, ViewPlugin, type DecorationSet, type ViewUpdate } from '@codemirror/view';
 
 /**
  * Layout-affecting subset of Joplin's Markdown editor styling, for browser tests.
