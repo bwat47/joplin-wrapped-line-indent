@@ -134,10 +134,10 @@ describe('wrappedLineIndentExtension', () => {
         (
             plugin as unknown as {
                 linePadding: { status: 'unknown' | 'stale' | 'measured'; value: number };
-                scheduleMeasure(): void;
+                requestMeasure(): void;
             }
         ).linePadding = { status: 'stale', value: 10 };
-        (plugin as unknown as { scheduleMeasure(): void }).scheduleMeasure();
+        (plugin as unknown as { requestMeasure(): void }).requestMeasure();
         flushMeasureCycle(view);
 
         const lineElements = [...view.dom.querySelectorAll<HTMLElement>('.cm-wrapped-line-indent')];
@@ -396,6 +396,36 @@ describe('wrappedLineIndentExtension', () => {
         view.destroy();
     });
 
+    it('keeps the revealed task line width when its checkbox is toggled', () => {
+        const view = createView('- [ ] one\n- [ ] two\n- [ ] three');
+        const paddings = (): string[] =>
+            [...view.dom.querySelectorAll<HTMLElement>('.cm-wrapped-line-indent')].map(
+                (line) => line.style.paddingLeft
+            );
+
+        // The line with the cursor shows raw markup, which is wider than a rendered checkbox.
+        coordsAtPosSpy.mockImplementation((position) => {
+            const line = view.state.doc.lineAt(position);
+            const head = view.state.selection.main.head;
+            const prefixWidth = head >= line.from && head <= line.to ? 48 : 24;
+            const left = position === line.from ? 0 : prefixWidth;
+            return { left, right: left, top: 0, bottom: 16 };
+        });
+
+        flushMeasureCycle(view);
+        flushMeasureCycle(view);
+        expect(paddings()).toEqual(['58px', '34px', '34px']);
+
+        view.dispatch({ changes: { from: 3, to: 4, insert: 'x' } });
+        expect(paddings()).toEqual(['58px', '34px', '34px']);
+
+        flushMeasureCycle(view);
+        flushMeasureCycle(view);
+        expect(paddings()).toEqual(['58px', '34px', '34px']);
+
+        view.destroy();
+    });
+
     it('uses task fallback width immediately after toggling checkbox markup', () => {
         const view = createView('  - [ ] first task');
         coordsAtPosSpy.mockImplementation((position) => {
@@ -466,21 +496,6 @@ describe('wrappedLineIndentExtension', () => {
         expect(
             [...view.dom.querySelectorAll<HTMLElement>('.cm-wrapped-line-indent')].map((line) => line.style.paddingLeft)
         ).toEqual(['50px', '50px']);
-
-        view.destroy();
-    });
-
-    it('does not remeasure unchanged block quote list lines after same-line edits', () => {
-        const view = createView('> - first quoted item\n> - second quoted item');
-        flushMeasureCycle(view);
-        coordsAtPosSpy.mockClear();
-
-        view.dispatch({
-            changes: { from: view.state.doc.line(1).to, insert: 'x' },
-        });
-
-        expect(view.dom.querySelectorAll<HTMLElement>('.cm-wrapped-line-indent')).toHaveLength(2);
-        expect(coordsAtPosSpy).not.toHaveBeenCalled();
 
         view.destroy();
     });

@@ -64,19 +64,19 @@ Decoration rebuilding iterates only visible lines (`O(V)`, not `O(N)`), so even 
 
 ### Explicit invalidation
 
-The `measurementSignature` — a composite of `defaultCharacterWidth`, `defaultLineHeight`, `scaleX`, `scaleY`, and `tabSize` — is checked on every update. When it changes, the fallback cache is cleared and visible lines are force-remeasured. Existing primary measurements are kept until replacements arrive, so decorations don't disappear mid-transition. This handles font changes, zoom, and DPR shifts explicitly.
+The `measurementSignature` — a composite of `defaultCharacterWidth`, `defaultLineHeight`, `scaleX`, `scaleY`, and `tabSize` — is checked on every update. When it changes, the fallback cache is cleared and visible lines are remeasured. Existing primary measurements are kept until replacements arrive, so decorations don't disappear mid-transition. This handles font changes, zoom, and DPR shifts explicitly.
 
-### Stale-document guard
+### Live measurement queue
 
-`measurePrefixes` compares `view.state.doc` against the document captured at schedule time. If they differ (an edit arrived between `scheduleMeasure` and the `read` callback), the result is discarded and measurement retried, preventing pixel widths from an old layout being applied to a new document state.
+The plugin registers one persistent measure request whose read phase measures whatever `pendingMeasurements` holds at that moment. CodeMirror runs the read phase after every plugin update, so the queue always matches the current document and viewport, and pixel widths from an old layout cannot be applied to a new document state.
 
-### `forceVisibleLineMeasurements`
+### Remeasuring visible lines
 
-On high-impact transitions — full document replaces, viewport/geometry changes, focus/selection changes — all visible lines are added to `pendingMeasurements` regardless of primary cache state, ensuring prompt refresh.
+Every editor update queues all visible prefixed lines in `pendingMeasurements` regardless of primary cache state, because Joplin can change how a prefix renders without changing the document. Only the plugin's own `measurementsChanged` refresh is limited to lines without a measurement, so applying measured widths cannot start another round.
 
 ### Single retry budget
 
-When `coordsAtPos` returns null (layout not yet stable), `needsRetry` is set and the cycle repeats. `incompleteMeasurementRefreshSpent` limits this to one retry per external trigger, preventing infinite refresh loops.
+When `coordsAtPos` returns null (layout not yet stable), `needsRetry` is set and the cycle repeats. `incompleteMeasurementRefreshSpent` limits this to one retry per editor update that is not the plugin's own refresh, preventing infinite refresh loops.
 
 ---
 
@@ -93,4 +93,3 @@ When `coordsAtPos` returns null (layout not yet stable), `needsRetry` is set and
 
 - Lines scrolling off-screen lose their primary cache entry and require a re-measurement round-trip on return (covered by the fallback, but a cost prefix-only caching doesn't incur).
 - The fallback cascade (`measuredWidth ?? fallbackWidth ?? estimatedWidth`) in `addDecorationsForLine` must be understood by maintainers. Incorrect changes to cache key normalization (e.g. the checkbox pattern) can silently reintroduce flicker.
-- `incompleteMeasurementRefreshSpent` resets on any `externalRefreshTrigger`; new update paths must set that flag appropriately or the retry budget won't reset.

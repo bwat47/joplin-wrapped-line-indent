@@ -323,6 +323,20 @@ describe('hanging indentation in Chromium', () => {
         await expectAligned(view);
     });
 
+    it('survives a tab-indented line long enough to span several visible ranges', async () => {
+        const view = createView(`- parent\n\t- ${'word '.repeat(40000)}\nafter`);
+        forceParsing(view, view.state.doc.length, 10000);
+        const line = view.state.doc.line(2);
+
+        for (const position of [line.from, line.from + 100000, line.to]) {
+            view.dispatch({ selection: { anchor: position }, scrollIntoView: true });
+            // CodeMirror drops a plugin that throws, so wait for the viewport to settle on the position.
+            await expect.poll(() => view.visibleRanges.some((range) => range.to >= position)).toBe(true);
+            await new Promise((resolve) => requestAnimationFrame(resolve));
+            expect(view.plugin(wrappedLineIndentExtension)).not.toBeNull();
+        }
+    });
+
     it('leaves fenced and indented code without hanging indentation', async () => {
         const view = createView('```\n- ' + CONTENT + '\n```\n\n    ' + CONTENT);
         forceParsing(view, view.state.doc.length);

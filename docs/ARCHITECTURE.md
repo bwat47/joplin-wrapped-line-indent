@@ -22,16 +22,17 @@ To ensure accurate values for the indentation padding, the plugin measures the e
 - **Prefix metadata**: `ParsedIndentPrefix` records the raw prefix text used for measurement.
 - **Line measurement keys**: `getLineMeasurementKey` keys exact measurements by visible line position and prefix text.
 - **Syntax exclusions**: Lines inside `CodeBlock`, `FencedCode`, `CodeInfo`, or `HorizontalRule` syntax nodes are skipped.
-- **Forced visible remeasurement**: Selection, focus, viewport, geometry, and measurement-signature changes pass `forceVisibleLineMeasurements` through `buildDecorations` to refresh visible line measurements while preserving displayed widths.
+- **Visible remeasurement**: Every editor update rebuilds the decorations and queues all visible prefixed lines for measurement, while the last known widths stay displayed. The one exception is the plugin's own `measurementsChanged` refresh, which queues only lines that have no measurement yet.
 - **Tab replacement**: Tabs in measured prefixes are replaced with `TabWidget` instances that provide stable, measurable tab widths.
 
 ### 3. Measurement Pipeline
 
 Measurements run through CodeMirror's `view.requestMeasure` read/write phases:
 
-- **Read phase (`measurePrefixes`)**: For each pending visible line, calls `view.coordsAtPos` at the prefix start and end, then computes `endCoords.left - startCoords.left`.
-- **Write phase**: Stores successful measurements in `measuredLineWidths`, updates fallback prefix widths, records measured line padding, and dispatches `measurementsChanged` when decorations need to refresh.
-- **Stale document guard**: If the document changed before the measurement read completes, the result is discarded and measurement is rescheduled.
+- **Read phase (`measurePrefixes`)**: Reads the shared base padding from the first undecorated line, retaining the previous value when none is available. For each pending visible line, calls `view.coordsAtPos` at the prefix start and end, then computes `endCoords.left - startCoords.left`.
+- **Write phase**: Stores successful prefix widths in `measuredLineWidths`, updates `fallbackPrefixWidths`, records the shared line padding, and dispatches `measurementsChanged` when decorations need to refresh.
+- **Live measurement queue**: The plugin registers one persistent measure request. Its read phase measures whatever `pendingMeasurements` holds at that moment. CodeMirror runs the read phase after every plugin update, so the queue always matches the current state and no snapshot or stale-document check is needed.
+- **Pending remeasurement**: `remeasureVisibleLines` stays set from an update until a read phase has run, so the plugin's own refresh cannot drop a full remeasurement that is still queued.
 - **Retry logic**: Temporarily unavailable coordinates schedule one deferred refresh. Later refreshes come from the next editor update.
 
 ### 4. Tab vs. Space Handling
@@ -44,22 +45,16 @@ Tabs and spaces are measured as rendered layout:
 
 ### 5. Caching and Fallbacks
 
-- **`measuredLineWidths`**: Exact per-visible-line measurements keyed by line start and prefix text.
+- **`measuredLineWidths`**: Exact per-visible-line prefix widths keyed by line start and normalized prefix text.
 - **`fallbackPrefixWidths`**: Display fallback widths keyed by normalized prefix text. Task checkbox states (`[ ]`, `[x]`, `[X]`) share a fallback key.
 - **`spaceCharacterWidth`**: A cached measurement of one rendered leading space, used only by `estimatePrefixWidth` when exact and fallback prefix widths are unavailable.
-- **Fallback order**: Decorations use exact line width first, then fallback prefix width, then `estimatePrefixWidth`.
-- **Measurement queueing**: Missing exact widths and forced visible remeasurement queue `coordsAtPos` measurement.
+- **Fallback order**: Decorations use the exact line width first, then the fallback width, then `estimatePrefixWidth`. Estimates wait until the shared line padding has been measured.
+- **Measurement queueing**: Every update other than the plugin's own refresh queues `coordsAtPos` measurement for all visible prefixed lines; the own refresh queues only lines without an exact measurement.
 - **Invalidation**: `measuredLineWidths` is preserved across rebuilds for still-visible lines whose line-start/prefix key still matches, then pruned for non-visible lines. `fallbackPrefixWidths` is kept across document, selection, focus, viewport, and geometry changes, and cleared when the measurement signature changes. `spaceCharacterWidth` is also cleared when the measurement signature changes.
 - **`measurementSignature`**: Tracks `defaultCharacterWidth`, `defaultLineHeight`, `scaleX`, `scaleY`, and `tabSize` for font, zoom, scale, and tab metric changes.
 
 ### 6. Reactivity
 
-The plugin rebuilds decorations and remeasures visible prefixes in response to:
+Prefix rendering can change without the document changing: Joplin reveals markup at the cursor and, since 3.7, toggles it on mouseup through a transaction carrying only a private state effect. The plugin therefore does not try to enumerate the triggers. Every `update` call rebuilds the decorations from the last known measurements and remeasures all visible prefixed lines. This covers document, selection, focus, viewport, geometry, syntax tree, and foreign state effect changes.
 
-- `docChanged`: Visible lines are rebuilt, matching visible exact measurements are reused, and stale non-visible line keys are pruned.
-- `selectionSet`: Joplin render-markup visibility may change; visible lines are remeasured without clearing displayed widths.
-- `focusChanged`: Editor render state may change; visible lines are remeasured.
-- External state effects: Joplin ≥ 3.7 toggles render-markup visibility on mouseup through a transaction carrying only a private state effect; any transaction with a non-`measurementsChanged` effect forces visible line remeasurement.
-- `geometryChanged` / `viewportChanged`: Layout or visible ranges changed; visible lines are remeasured.
-- Syntax tree changes: Decorations are rebuilt when parser state changes.
-- `measurementsChanged`: Newly measured widths are applied through an internal effect.
+The plugin's own `measurementsChanged` refresh is the exception. It only applies widths that were just measured, so it queues measurement only for lines that still have none (and for all lines if the measurement signature changed in the same update). Remeasuring everything after it could loop.

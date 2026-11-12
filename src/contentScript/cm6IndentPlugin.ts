@@ -5,7 +5,6 @@ import {
     StateEffect,
     type EditorState,
     type Line,
-    type Text,
     type Transaction,
 } from '@codemirror/state';
 import {
@@ -34,12 +33,17 @@ interface MeasurementTarget {
     to: number;
 }
 
+interface MeasuredLine {
+    fallbackKey: string;
+    lineKey: string;
+    width: number;
+}
+
 interface MeasureReadResult {
     linePaddingLeft: number;
-    isStale: boolean;
+    lines: MeasuredLine[];
     needsRetry: boolean;
     spaceCharacterWidth: number | null;
-    widths: Map<string, number>;
 }
 
 export interface ParsedIndentPrefix {
@@ -51,10 +55,6 @@ type LinePaddingMeasurementStatus = 'unknown' | 'stale' | 'measured';
 interface LinePaddingMeasurement {
     status: LinePaddingMeasurementStatus;
     value: number;
-}
-
-interface BuildDecorationsOptions {
-    forceVisibleLineMeasurements: boolean;
 }
 
 class TabWidget extends WidgetType {
@@ -239,12 +239,21 @@ function createLineDecoration(width: number, linePaddingLeft: number): Decoratio
     });
 }
 
-function getLineMeasurementKey(line: Line, prefix: ParsedIndentPrefix): string {
-    return `${line.from}:${prefix.text}`;
-}
-
+/**
+ * Treats task checkbox states as one prefix, so toggling a checkbox keeps a line's measurement.
+ *
+ * Examples:
+ * - `- [x] `, `- [X] ` → `- [ ] `
+ * - `> - ` → `> - `
+ */
 function getFallbackPrefixKey(prefixText: string): string {
     return prefixText.replace(TASK_LIST_CHECKBOX_PATTERN, '[ ]');
+}
+
+// Uses the normalized prefix: a toggled checkbox would otherwise miss the line's own measurement
+// and show another line's fallback width, which differs while Joplin reveals this line's markup.
+function getLineMeasurementKey(line: Line, fallbackKey: string): string {
+    return `${line.from}:${fallbackKey}`;
 }
 
 function getMeasurementSignature(view: EditorView): string {
@@ -289,7 +298,19 @@ class WrappedLineIndentPlugin implements PluginValue {
 
     private readonly pendingMeasurements = new Map<string, MeasurementTarget>();
 
-    private measureScheduled = false;
+    // One request object, so CodeMirror runs at most one measurement per measure cycle.
+    private readonly measureRequest = {
+        read: (view: EditorView): MeasureReadResult | null => (this.destroyed ? null : this.measurePrefixes(view)),
+        write: (result: MeasureReadResult | null): void => {
+            if (result && !this.destroyed) {
+                this.applyMeasurements(result);
+            }
+        },
+    };
+
+    // Set by updates that may have changed how prefixes render, until a measurement has run.
+    // It outlives the plugin's own refresh, which must not drop a remeasurement still queued.
+    private remeasureVisibleLines = true;
 
     private measurementSignature: string;
 
@@ -305,68 +326,48 @@ class WrappedLineIndentPlugin implements PluginValue {
     public constructor(private readonly view: EditorView) {
         this.measurementSignature = getMeasurementSignature(view);
         this.decorations = this.buildDecorations();
-        this.scheduleMeasure();
+        this.requestMeasure();
     }
 
     public update(update: ViewUpdate): void {
-        const fullDocumentReplaced = update.transactions.some(isFullDocumentReplace);
         const nextMeasurementSignature = getMeasurementSignature(this.view);
-        const measurementsNeedRefresh = nextMeasurementSignature !== this.measurementSignature;
-        if (measurementsNeedRefresh) {
+        const metricsChanged = nextMeasurementSignature !== this.measurementSignature;
+        if (metricsChanged) {
             this.measurementSignature = nextMeasurementSignature;
             this.fallbackPrefixWidths.clear();
             this.markLinePaddingStale();
             this.spaceCharacterWidth = null;
         }
 
-        if (fullDocumentReplaced) {
+        if (update.transactions.some(isFullDocumentReplace)) {
             this.clearMeasurementCaches();
         }
 
-        const receivedMeasurementUpdate = update.transactions.some((transaction) =>
+        // Any other update can change how prefixes render without touching the document:
+        // Joplin reveals markup at the cursor, and since 3.7 toggles it on mouseup through a
+        // transaction that carries only a private state effect. The plugin's own refresh only
+        // applies widths it has just measured, so remeasuring after it could loop.
+        const isOwnRefresh = update.transactions.some((transaction) =>
             transaction.effects.some((effect) => effect.is(measurementsChanged))
         );
-        // Joplin >= 3.7 toggles render-markup visibility on mouseup via a transaction that
-        // carries only a private state effect (no doc/selection/focus change), so any foreign
-        // effect must force a remeasure of the visible prefixes.
-        const receivedExternalEffect = update.transactions.some((transaction) =>
-            transaction.effects.some((effect) => !effect.is(measurementsChanged))
-        );
-        const editorContentOrStateChanged = update.docChanged || update.selectionSet || update.focusChanged;
-        const viewportOrGeometryChanged = update.viewportChanged || update.geometryChanged;
-        const externalRefreshTrigger =
-            measurementsNeedRefresh ||
-            editorContentOrStateChanged ||
-            viewportOrGeometryChanged ||
-            receivedExternalEffect;
-        const syntaxTreeChanged = syntaxTree(update.startState) !== syntaxTree(update.state);
-        const shouldRebuildDecorations = externalRefreshTrigger || receivedMeasurementUpdate || syntaxTreeChanged;
-
-        if (externalRefreshTrigger) {
+        if (!isOwnRefresh) {
             this.incompleteMeasurementRefreshSpent = false;
         }
 
-        if (shouldRebuildDecorations) {
-            if (update.geometryChanged) {
-                this.markLinePaddingStale();
-            }
-
-            this.decorations = this.buildDecorations({
-                forceVisibleLineMeasurements:
-                    fullDocumentReplaced ||
-                    measurementsNeedRefresh ||
-                    update.selectionSet ||
-                    update.focusChanged ||
-                    viewportOrGeometryChanged ||
-                    receivedExternalEffect,
-            });
-            this.scheduleMeasure();
+        if (!isOwnRefresh || metricsChanged) {
+            this.remeasureVisibleLines = true;
         }
+
+        if (update.geometryChanged) {
+            this.markLinePaddingStale();
+        }
+
+        this.decorations = this.buildDecorations();
+        this.requestMeasure();
     }
 
     public destroy(): void {
         this.destroyed = true;
-        this.measureScheduled = false;
 
         if (this.refreshFrame !== null) {
             cancelAnimationFrame(this.refreshFrame);
@@ -385,25 +386,31 @@ class WrappedLineIndentPlugin implements PluginValue {
         this.markLinePaddingStale();
     }
 
-    private buildDecorations(
-        options: BuildDecorationsOptions = { forceVisibleLineMeasurements: false }
-    ): DecorationSet {
+    /**
+     * Decorates the visible lines with their last known measurements and queues measurement for
+     * all of them, or only for lines without a measurement when `remeasureVisibleLines` is false.
+     */
+    private buildDecorations(): DecorationSet {
         const builder = new RangeSetBuilder<Decoration>();
         const state = this.view.state;
         const visibleLineKeys = new Set<string>();
 
         this.pendingMeasurements.clear();
 
+        // CodeMirror splits very long lines across several visible ranges; decorate each line once.
+        let lastLineTo = -1;
+
         for (const range of this.view.visibleRanges) {
-            let position = range.from;
+            let position = Math.max(range.from, lastLineTo + 1);
 
             while (position <= range.to) {
                 const line = state.doc.lineAt(position);
-                const lineKey = this.addDecorationsForLine(builder, line, options);
+                const lineKey = this.addDecorationsForLine(builder, line);
                 if (lineKey) {
                     visibleLineKeys.add(lineKey);
                 }
 
+                lastLineTo = line.to;
                 if (line.to >= range.to) {
                     break;
                 }
@@ -416,11 +423,7 @@ class WrappedLineIndentPlugin implements PluginValue {
         return builder.finish();
     }
 
-    private addDecorationsForLine(
-        builder: RangeSetBuilder<Decoration>,
-        line: Line,
-        options: BuildDecorationsOptions
-    ): string | null {
+    private addDecorationsForLine(builder: RangeSetBuilder<Decoration>, line: Line): string | null {
         const prefix = findIndentPrefix(this.view.state, line);
         if (!prefix) {
             return null;
@@ -434,11 +437,12 @@ class WrappedLineIndentPlugin implements PluginValue {
             return null;
         }
 
-        const lineKey = getLineMeasurementKey(line, prefix);
+        const fallbackKey = getFallbackPrefixKey(prefix.text);
+        const lineKey = getLineMeasurementKey(line, fallbackKey);
         const measuredWidth = this.measuredLineWidths.get(lineKey);
-        if (measuredWidth === undefined || options.forceVisibleLineMeasurements) {
+        if (measuredWidth === undefined || this.remeasureVisibleLines) {
             this.pendingMeasurements.set(lineKey, {
-                fallbackKey: getFallbackPrefixKey(prefix.text),
+                fallbackKey,
                 from: line.from,
                 leadingSpaces: /^ +/.exec(prefix.text)?.[0].length ?? 0,
                 to: prefixTo,
@@ -468,75 +472,41 @@ class WrappedLineIndentPlugin implements PluginValue {
         }
     }
 
-    private scheduleMeasure(): void {
-        if (this.destroyed) {
-            return;
+    private requestMeasure(): void {
+        if (this.pendingMeasurements.size > 0 || this.needsLinePaddingMeasurement()) {
+            this.view.requestMeasure(this.measureRequest);
+        }
+    }
+
+    private applyMeasurements(result: MeasureReadResult): void {
+        let changed = this.linePadding.value !== result.linePaddingLeft;
+        this.linePadding = { status: 'measured', value: result.linePaddingLeft };
+
+        if (result.spaceCharacterWidth !== null && this.spaceCharacterWidth !== result.spaceCharacterWidth) {
+            this.spaceCharacterWidth = result.spaceCharacterWidth;
+            changed = true;
         }
 
-        if (this.measureScheduled || (this.pendingMeasurements.size === 0 && !this.needsLinePaddingMeasurement())) {
-            return;
+        for (const { lineKey, fallbackKey, width } of result.lines) {
+            if (this.measuredLineWidths.get(lineKey) !== width) {
+                this.measuredLineWidths.set(lineKey, width);
+                changed = true;
+            }
+
+            if (this.fallbackPrefixWidths.get(fallbackKey) !== width) {
+                this.fallbackPrefixWidths.set(fallbackKey, width);
+                changed = true;
+            }
         }
 
-        this.measureScheduled = true;
-        const targets = new Map(this.pendingMeasurements);
-        const measuredDoc = this.view.state.doc;
+        const shouldRefreshForIncompleteMeasurement = result.needsRetry && !this.incompleteMeasurementRefreshSpent;
+        if (shouldRefreshForIncompleteMeasurement) {
+            this.incompleteMeasurementRefreshSpent = true;
+        }
 
-        this.view.requestMeasure<MeasureReadResult>({
-            read: (view) => {
-                if (this.destroyed) {
-                    return this.createEmptyMeasureResult();
-                }
-
-                return this.measurePrefixes(view, targets, measuredDoc, this.linePadding.value);
-            },
-            write: (result) => {
-                if (this.destroyed) {
-                    return;
-                }
-
-                this.measureScheduled = false;
-
-                if (result.isStale) {
-                    this.markLinePaddingStale();
-                    this.scheduleMeasure();
-                    return;
-                }
-
-                let changed = false;
-                if (this.linePadding.value !== result.linePaddingLeft) {
-                    changed = true;
-                }
-                this.linePadding = { status: 'measured', value: result.linePaddingLeft };
-
-                if (result.spaceCharacterWidth !== null && this.spaceCharacterWidth !== result.spaceCharacterWidth) {
-                    this.spaceCharacterWidth = result.spaceCharacterWidth;
-                    changed = true;
-                }
-
-                for (const [lineKey, width] of result.widths) {
-                    if (this.measuredLineWidths.get(lineKey) !== width) {
-                        this.measuredLineWidths.set(lineKey, width);
-                        changed = true;
-                    }
-
-                    const fallbackKey = targets.get(lineKey)?.fallbackKey;
-                    if (fallbackKey && this.fallbackPrefixWidths.get(fallbackKey) !== width) {
-                        this.fallbackPrefixWidths.set(fallbackKey, width);
-                        changed = true;
-                    }
-                }
-
-                const shouldRefreshForIncompleteMeasurement =
-                    result.needsRetry && !this.incompleteMeasurementRefreshSpent;
-                if (shouldRefreshForIncompleteMeasurement) {
-                    this.incompleteMeasurementRefreshSpent = true;
-                }
-
-                if (changed || shouldRefreshForIncompleteMeasurement) {
-                    this.scheduleDecorationsRefresh();
-                }
-            },
-        });
+        if (changed || shouldRefreshForIncompleteMeasurement) {
+            this.scheduleDecorationsRefresh();
+        }
     }
 
     private scheduleDecorationsRefresh(): void {
@@ -558,16 +528,6 @@ class WrappedLineIndentPlugin implements PluginValue {
         });
     }
 
-    private createEmptyMeasureResult(): MeasureReadResult {
-        return {
-            linePaddingLeft: this.linePadding.value,
-            isStale: false,
-            needsRetry: false,
-            spaceCharacterWidth: this.spaceCharacterWidth,
-            widths: new Map<string, number>(),
-        };
-    }
-
     private markLinePaddingStale(): void {
         if (this.linePadding.status === 'unknown') {
             return;
@@ -584,27 +544,17 @@ class WrappedLineIndentPlugin implements PluginValue {
         return this.linePadding.status !== 'unknown';
     }
 
-    private measurePrefixes(
-        view: EditorView,
-        targets: Map<string, MeasurementTarget>,
-        measuredDoc: Text,
-        fallbackPaddingLeft: number
-    ): MeasureReadResult {
-        const measuredWidths = new Map<string, number>();
-        const linePaddingLeft = getLinePaddingLeft(view, fallbackPaddingLeft);
-        if (view.state.doc !== measuredDoc) {
-            return {
-                linePaddingLeft,
-                isStale: true,
-                needsRetry: false,
-                spaceCharacterWidth: this.spaceCharacterWidth,
-                widths: measuredWidths,
-            };
-        }
-
+    /**
+     * Measures the lines queued by the latest `buildDecorations` call. CodeMirror runs this in
+     * its read phase, after every plugin update, so the queue always matches the current state.
+     */
+    private measurePrefixes(view: EditorView): MeasureReadResult {
+        const lines: MeasuredLine[] = [];
+        this.remeasureVisibleLines = false;
         let needsRetry = false;
+        const linePaddingLeft = getLinePaddingLeft(view, this.linePadding.value);
         let measuredSpaceCharacterWidth = this.spaceCharacterWidth;
-        for (const [lineKey, target] of targets) {
+        for (const [lineKey, target] of this.pendingMeasurements) {
             const startCoords = view.coordsAtPos(target.from, 1);
             const endCoords = view.coordsAtPos(target.to, -1);
 
@@ -619,7 +569,7 @@ class WrappedLineIndentPlugin implements PluginValue {
                 continue;
             }
 
-            measuredWidths.set(lineKey, width);
+            lines.push({ fallbackKey: target.fallbackKey, lineKey, width });
 
             if (measuredSpaceCharacterWidth === null) {
                 measuredSpaceCharacterWidth = measureSpaceCharacterWidth(view, target);
@@ -628,10 +578,9 @@ class WrappedLineIndentPlugin implements PluginValue {
 
         return {
             linePaddingLeft,
-            isStale: false,
+            lines,
             needsRetry,
             spaceCharacterWidth: measuredSpaceCharacterWidth,
-            widths: measuredWidths,
         };
     }
 }
