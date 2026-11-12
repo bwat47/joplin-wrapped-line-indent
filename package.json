@@ -1,6 +1,6 @@
 {
     "name": "joplin-plugin-wrapped-line-indent",
-    "version": "1.2.0",
+    "version": "1.2.1",
     "scripts": {
         "dist": "npm run typecheck && joplin-plugin-scripts build",
         "prepare": "npm run dist",
