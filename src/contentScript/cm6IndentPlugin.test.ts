@@ -21,23 +21,20 @@ type MeasurableEditorView = EditorView & {
 };
 
 describe('wrappedLineIndentExtension', () => {
-    let frameCallbacks: Map<number, FrameRequestCallback>;
     let nextFrameId: number;
+    let microtaskCallbacks: VoidFunction[];
     let coordsAtPosSpy: MockInstance<EditorView['coordsAtPos']>;
     let styleElement: HTMLStyleElement;
 
-    const flushAnimationFrames = () => {
-        const callbacks = [...frameCallbacks.values()];
-        frameCallbacks.clear();
-
-        for (const callback of callbacks) {
-            callback(performance.now());
+    const flushMicrotasks = () => {
+        while (microtaskCallbacks.length > 0) {
+            microtaskCallbacks.shift()!();
         }
     };
 
     const flushMeasureCycle = (view: EditorView) => {
         (view as MeasurableEditorView).measure(false);
-        flushAnimationFrames();
+        flushMicrotasks();
     };
 
     const createView = (doc: string, extensions: Extension[] = []): EditorView => {
@@ -59,17 +56,14 @@ describe('wrappedLineIndentExtension', () => {
     };
 
     beforeEach(() => {
-        frameCallbacks = new Map();
         nextFrameId = 1;
+        microtaskCallbacks = [];
+        vi.stubGlobal('queueMicrotask', (callback: VoidFunction): void => {
+            microtaskCallbacks.push(callback);
+        });
 
-        vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback): number => {
-            const frameId = nextFrameId++;
-            frameCallbacks.set(frameId, callback);
-            return frameId;
-        });
-        vi.stubGlobal('cancelAnimationFrame', (frameId: number): void => {
-            frameCallbacks.delete(frameId);
-        });
+        vi.stubGlobal('requestAnimationFrame', (): number => nextFrameId++);
+        vi.stubGlobal('cancelAnimationFrame', vi.fn());
 
         coordsAtPosSpy = vi.spyOn(EditorView.prototype, 'coordsAtPos').mockImplementation((position) => {
             const left = position * 8;
@@ -85,7 +79,6 @@ describe('wrappedLineIndentExtension', () => {
         coordsAtPosSpy.mockRestore();
         styleElement.remove();
         document.body.replaceChildren();
-        frameCallbacks.clear();
         vi.unstubAllGlobals();
     });
 
@@ -685,6 +678,46 @@ describe('wrappedLineIndentExtension', () => {
         view.destroy();
     });
 
+    it('coalesces measured widths into one microtask refresh without another animation frame', () => {
+        const view = createView('- item');
+        const dispatchSpy = vi.spyOn(view, 'dispatch');
+        let width = 24;
+        coordsAtPosSpy.mockImplementation((position) => {
+            const left = position === 0 ? 0 : width;
+            return { left, right: left, top: 0, bottom: 16 };
+        });
+
+        (view as MeasurableEditorView).measure(false);
+        expect(dispatchSpy).not.toHaveBeenCalled();
+        expect(microtaskCallbacks).toHaveLength(1);
+
+        view.dispatch({ selection: { anchor: 3 } });
+        width = 40;
+        (view as MeasurableEditorView).measure(false);
+        expect(microtaskCallbacks).toHaveLength(1);
+        dispatchSpy.mockClear();
+
+        flushMicrotasks();
+
+        expect(dispatchSpy).toHaveBeenCalledTimes(1);
+        expect(view.dom.querySelector<HTMLElement>('.cm-wrapped-line-indent')?.style.paddingLeft).toBe('50px');
+        expect(view.plugin(wrappedLineIndentExtension)).not.toBeNull();
+
+        view.destroy();
+    });
+
+    it('does not dispatch a queued microtask refresh after destruction', () => {
+        const view = createView('- item');
+        const dispatchSpy = vi.spyOn(view, 'dispatch');
+
+        (view as MeasurableEditorView).measure(false);
+        expect(microtaskCallbacks).toHaveLength(1);
+        view.destroy();
+        flushMicrotasks();
+
+        expect(dispatchSpy).not.toHaveBeenCalled();
+    });
+
     it('applies an exact measurement on the one deferred follow-up refresh', () => {
         const view = createView('> - item');
         const dispatchSpy = vi.spyOn(view, 'dispatch');
@@ -743,7 +776,7 @@ describe('wrappedLineIndentExtension', () => {
         view.dispatch({ selection: { anchor: view.state.doc.line(2).to } });
         measurementAvailable = true;
 
-        flushAnimationFrames();
+        flushMicrotasks();
         flushMeasureCycle(view);
         flushMeasureCycle(view);
 

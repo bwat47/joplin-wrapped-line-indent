@@ -317,7 +317,7 @@ class WrappedLineIndentPlugin implements PluginValue {
     // Allows one extra refresh when coordinates are temporarily unavailable, without looping forever.
     private incompleteMeasurementRefreshSpent = false;
 
-    private refreshFrame: number | null = null;
+    private refreshScheduled = false;
 
     private linePadding: LinePaddingMeasurement = { status: 'unknown', value: 0 };
 
@@ -368,11 +368,6 @@ class WrappedLineIndentPlugin implements PluginValue {
 
     public destroy(): void {
         this.destroyed = true;
-
-        if (this.refreshFrame !== null) {
-            cancelAnimationFrame(this.refreshFrame);
-            this.refreshFrame = null;
-        }
 
         this.pendingMeasurements.clear();
         this.measuredLineWidths.clear();
@@ -514,12 +509,14 @@ class WrappedLineIndentPlugin implements PluginValue {
             return;
         }
 
-        if (this.refreshFrame !== null) {
+        if (this.refreshScheduled) {
             return;
         }
 
-        this.refreshFrame = requestAnimationFrame(() => {
-            this.refreshFrame = null;
+        this.refreshScheduled = true;
+        // Leave CodeMirror's write phase before dispatching, but apply widths before paint.
+        queueMicrotask(() => {
+            this.refreshScheduled = false;
             if (this.destroyed) {
                 return;
             }
