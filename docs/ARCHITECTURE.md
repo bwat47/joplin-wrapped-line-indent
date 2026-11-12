@@ -30,7 +30,7 @@ To ensure accurate values for the indentation padding, the plugin measures the e
 Measurements run through CodeMirror's `view.requestMeasure` read/write phases:
 
 - **Read phase (`measurePrefixes`)**: Reads the shared base padding from the first undecorated line, retaining the previous value when none is available. For each pending visible line, calls `view.coordsAtPos` at the prefix start and end, then computes `endCoords.left - startCoords.left`.
-- **Write phase**: Stores successful prefix widths in `measuredLineWidths`, updates `fallbackPrefixWidths`, records the shared line padding, and dispatches `measurementsChanged` when decorations need to refresh.
+- **Write phase**: Stores successful prefix widths in `measuredLineWidths`, updates `fallbackPrefixWidths`, records the shared line padding, and queues a deduplicated microtask to dispatch `measurementsChanged` when decorations need to refresh. The microtask runs after CodeMirror leaves its write phase, allowing widths to be applied before paint without waiting for another animation frame. Queued refreshes do nothing after plugin destruction.
 - **Live measurement queue**: The plugin registers one persistent measure request. Its read phase measures whatever `pendingMeasurements` holds at that moment. CodeMirror runs the read phase after every plugin update, so the queue always matches the current state and no snapshot or stale-document check is needed.
 - **Pending remeasurement**: `remeasureVisibleLines` stays set from an update until a read phase has run, so the plugin's own refresh cannot drop a full remeasurement that is still queued.
 - **Retry logic**: Temporarily unavailable coordinates schedule one deferred refresh. Later refreshes come from the next editor update.
