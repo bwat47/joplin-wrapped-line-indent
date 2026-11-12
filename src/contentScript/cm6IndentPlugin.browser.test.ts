@@ -22,6 +22,8 @@ const CONTENT = 'Wonderful little words make this paragraph wrap across several 
 const BASE_PADDING = 6;
 const views: EditorView[] = [];
 const linePaddings = new WeakMap<EditorView, number>();
+// CodeMirror drops a plugin that throws and reports the exception here instead.
+const viewExceptions = new WeakMap<EditorView, unknown[]>();
 
 interface FixtureOptions {
     font?: string;
@@ -36,6 +38,7 @@ interface FixtureOptions {
 function createView(doc: string, options: FixtureOptions = {}): EditorView {
     const parent = document.createElement('div');
     document.body.append(parent);
+    const exceptions: unknown[] = [];
     const view = new EditorView({
         parent,
         state: EditorState.create({
@@ -58,12 +61,24 @@ function createView(doc: string, options: FixtureOptions = {}): EditorView {
                 markdown({ base: markdownLanguage }),
                 ...(options.extensions ?? []),
                 wrappedLineIndentExtension,
+                EditorView.exceptionSink.of((exception) => exceptions.push(exception)),
             ],
         }),
     });
     views.push(view);
     linePaddings.set(view, options.linePadding ?? BASE_PADDING);
+    viewExceptions.set(view, exceptions);
     return view;
+}
+
+/**
+ * Resolves after CodeMirror's next measure cycle and any refresh microtasks its writes queued.
+ * CodeMirror runs measure requests in request order, so this write follows those already queued.
+ */
+function afterMeasureCycle(view: EditorView): Promise<void> {
+    return new Promise((resolve) => {
+        view.requestMeasure({ read: () => null, write: () => queueMicrotask(resolve) });
+    });
 }
 
 /** Read glyph geometry independently of the coordsAtPos API used by the plugin. */
@@ -159,12 +174,17 @@ beforeAll(async () => {
 });
 
 afterEach(() => {
+    const exceptions = views.flatMap((view) => viewExceptions.get(view) ?? []);
     for (const view of views) {
         const parent = view.dom.parentElement;
         view.destroy();
         parent?.remove();
     }
     views.length = 0;
+    // Fail any test whose editor dropped a throwing plugin, after cleanup so later tests start clean.
+    if (exceptions.length > 0) {
+        throw new Error(`CodeMirror reported exceptions during the test: ${exceptions.map(String).join('; ')}`);
+    }
 });
 
 describe('hanging indentation in Chromium', () => {
@@ -319,9 +339,9 @@ describe('hanging indentation in Chromium', () => {
         await expectAligned(view);
         const hiddenLeft = firstContentRow(view, 1).left;
         view.dispatch({ effects: markup.reconfigure([]) });
-        // CodeMirror's measurement frame is already queued. Its microtask refresh must
-        // align the rows before this frame callback, without waiting for a second frame.
-        await new Promise((resolve) => requestAnimationFrame(resolve));
+        // The plugin's refresh must align the rows within this measure cycle, before paint,
+        // without waiting for a second cycle.
+        await afterMeasureCycle(view);
         const rows = contentRows(view, 1);
         expect(rows.length).toBeGreaterThan(1);
         expect(rows[0]!.left - hiddenLeft).toBeGreaterThan(1);
@@ -342,8 +362,8 @@ describe('hanging indentation in Chromium', () => {
         await expect
             .poll(() => view.visibleRanges.filter((range) => range.from <= line.to && range.to >= line.from).length)
             .toBeGreaterThan(1);
-        // Let the pending measurement run; CodeMirror drops a plugin that throws.
-        await new Promise((resolve) => requestAnimationFrame(resolve));
+        await afterMeasureCycle(view);
+        expect(viewExceptions.get(view)).toEqual([]);
         expect(view.plugin(wrappedLineIndentExtension)).not.toBeNull();
     });
 
