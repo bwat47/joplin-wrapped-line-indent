@@ -1,0 +1,15 @@
+{
+    "$schema": "./node_modules/fallow/schema.json",
+    "entry": ["src/contentScript/cm6IndentPlugin.ts"],
+    "supportEntry": ["src/**/*.test.ts", "src/contentScript/testing/**/*.ts"],
+    "ignorePatterns": ["**/*.d.ts", "api/**", "src/logger.ts"],
+    "rules": {
+        "complexity-crap": "off",
+        "dev-dependencies-in-production": "off"
+    },
+    "health": {
+        "ignore": ["src/**/*.test.ts", "src/contentScript/testing/**/*.ts"],
+        "maxCognitive": 15,
+        "maxCyclomatic": 20
+    }
+}

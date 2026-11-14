@@ -17,3 +17,4 @@ gemini/
 prompts/
 .vitest/
 .api-staging-*/
+.fallow/

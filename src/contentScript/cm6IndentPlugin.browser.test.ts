@@ -1,7 +1,6 @@
 /// <reference types="vite/client" />
 import '@fontsource/roboto/latin-400.css';
 import '@fontsource/roboto-mono/latin-400.css';
-
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { forceParsing, syntaxTreeAvailable } from '@codemirror/language';
@@ -392,14 +391,14 @@ describe('hanging indentation in Chromium', () => {
     });
 });
 
-describe('hanging indentation with Joplin editor styling', () => {
-    const joplinView = (doc: string, fontFamily = '"Roboto"', extensions: Extension[] = []): EditorView =>
-        createView(doc, {
-            styling: joplinEditorStyling({ fontFamily, monospaceFont: '"Roboto Mono"' }),
-            linePadding: JOPLIN_LINE_PADDING,
-            extensions,
-        });
+const joplinView = (doc: string, fontFamily = '"Roboto"', extensions: Extension[] = []): EditorView =>
+    createView(doc, {
+        styling: joplinEditorStyling({ fontFamily, monospaceFont: '"Roboto Mono"' }),
+        linePadding: JOPLIN_LINE_PADDING,
+        extensions,
+    });
 
+describe('hanging indentation with Joplin editor styling', () => {
     it.each(
         ['"Roboto"', '"Roboto Mono"'].flatMap((font) =>
             ['> ', '> - ', '> - [ ] ', '>   - [ ] '].map((prefix) => ({ font, prefix }))

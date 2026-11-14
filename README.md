@@ -50,7 +50,10 @@ This plugin changes editor display only. It does not modify note content.
 
 ## Development
 
+Requires Node 22 or later.
+
 ```bash
+npm ci
 npm test
 npm run lint
 npm run dist
@@ -70,3 +73,5 @@ The browser suite uses bundled Roboto and Roboto Mono fonts and DOM range measur
 wrapped-line alignment within one CSS pixel. It covers Markdown prefixes, tabs and mixed whitespace,
 font changes, resizing, edits, scrolling, tab-widget editing, and code-block exclusions. A simulated
 hidden quote marker exercises markup visibility changes.
+
+`npm run dist` creates the installable plugin at `publish/com.bwat47.joplin-wrapped-line-indent.jpl`.
