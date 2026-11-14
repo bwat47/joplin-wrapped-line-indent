@@ -20,6 +20,37 @@ type MeasurableEditorView = EditorView & {
     measure(flush?: boolean): void;
 };
 
+const createView = (doc: string, extensions: Extension[] = []): EditorView => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+
+    const view = new EditorView({
+        parent,
+        state: EditorState.create({
+            doc,
+            extensions: [markdown({ base: markdownLanguage }), ...extensions, wrappedLineIndentExtension],
+        }),
+    });
+    for (const lineElement of view.dom.querySelectorAll<HTMLElement>('.cm-line')) {
+        lineElement.style.paddingLeft = '10px';
+    }
+
+    return view;
+};
+
+const createTransaction = (doc: string, changes?: ChangeSpec) => {
+    const state = EditorState.create({ doc });
+    return state.update({ changes });
+};
+
+const prefixTexts = (doc: string): (string | null)[] => {
+    const state = EditorState.create({ doc, extensions: [markdown({ base: markdownLanguage })] });
+    return Array.from(
+        { length: state.doc.lines },
+        (_, index) => findIndentPrefix(state, state.doc.line(index + 1))?.text ?? null
+    );
+};
+
 describe('wrappedLineIndentExtension', () => {
     let nextFrameId: number;
     let microtaskCallbacks: VoidFunction[];
@@ -35,24 +66,6 @@ describe('wrappedLineIndentExtension', () => {
     const flushMeasureCycle = (view: EditorView) => {
         (view as MeasurableEditorView).measure(false);
         flushMicrotasks();
-    };
-
-    const createView = (doc: string, extensions: Extension[] = []): EditorView => {
-        const parent = document.createElement('div');
-        document.body.append(parent);
-
-        const view = new EditorView({
-            parent,
-            state: EditorState.create({
-                doc,
-                extensions: [markdown({ base: markdownLanguage }), ...extensions, wrappedLineIndentExtension],
-            }),
-        });
-        for (const lineElement of view.dom.querySelectorAll<HTMLElement>('.cm-line')) {
-            lineElement.style.paddingLeft = '10px';
-        }
-
-        return view;
     };
 
     beforeEach(() => {
@@ -199,7 +212,7 @@ describe('wrappedLineIndentExtension', () => {
     it('remeasures block quote prefixes when marker visibility changes via an effect-only transaction', () => {
         // Joplin >= 3.7 toggles render-markup visibility on mouseup through a transaction
         // that carries only a private state effect, without a selection or document change.
-        const toggleMarkupEffect = StateEffect.define<null>();
+        const toggleMarkupEffect = StateEffect.define();
         const view = createView('> - quoted item');
         let markupRevealed = false;
         coordsAtPosSpy.mockImplementation((position) => {
@@ -872,11 +885,6 @@ describe('wrappedLineIndentExtension', () => {
 });
 
 describe('isFullDocumentReplace', () => {
-    const createTransaction = (doc: string, changes?: ChangeSpec) => {
-        const state = EditorState.create({ doc });
-        return state.update({ changes });
-    };
-
     it('detects a single change replacing the whole previous document', () => {
         const transaction = createTransaction('old note', {
             from: 0,
@@ -913,14 +921,6 @@ describe('isFullDocumentReplace', () => {
 });
 
 describe('findIndentPrefix', () => {
-    const prefixTexts = (doc: string): (string | null)[] => {
-        const state = EditorState.create({ doc, extensions: [markdown({ base: markdownLanguage })] });
-        return Array.from(
-            { length: state.doc.lines },
-            (_, index) => findIndentPrefix(state, state.doc.line(index + 1))?.text ?? null
-        );
-    };
-
     it('captures quoted list prefixes', () => {
         expect(prefixTexts('> - quoted item')).toEqual(['> - ']);
         expect(prefixTexts('> > 12. nested quoted item')).toEqual(['> > 12. ']);

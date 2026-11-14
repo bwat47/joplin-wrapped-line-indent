@@ -58,3 +58,9 @@ Tabs and spaces are measured as rendered layout:
 Prefix rendering can change without the document changing: Joplin reveals markup at the cursor and, since 3.7, toggles it on mouseup through a transaction carrying only a private state effect. The plugin therefore does not try to enumerate the triggers. Every `update` call rebuilds the decorations from the last known measurements and remeasures all visible prefixed lines. This covers document, selection, focus, viewport, geometry, syntax tree, and foreign state effect changes.
 
 The plugin's own `measurementsChanged` refresh is the exception. It only applies widths that were just measured, so it queues measurement only for lines that still have none (and for all lines if the measurement signature changed in the same update). Remeasuring everything after it could loop.
+
+### 7. Build and Packaging
+
+`npm run dist` typechecks, then delegates bundling and packaging to the shared `@bwat47/joplin-plugin-scripts` dev dependency, which uses esbuild to produce `dist/` and the `.jpl` in `publish/`. Build behavior lives in that package rather than in local scripts.
+
+`plugin.config.json` registers `contentScript/cm6IndentPlugin.ts` as an `extraScripts` entry. The content script keeps Joplin's CodeMirror and Lezer libraries external.
